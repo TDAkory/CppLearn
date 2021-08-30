@@ -1,2 +1,0 @@
-# deducing-type
-
