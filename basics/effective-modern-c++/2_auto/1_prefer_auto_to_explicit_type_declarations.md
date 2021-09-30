@@ -1,3 +1,5 @@
+Item 5: Prefer auto to explicit type declarations
+
 # 优先考虑auto而不是显式类型声明
 
 类型声明一个变量而不赋初值，编译是可以通过的，但是值是不确定的。它可能会被初始化为0，这得取决于工作环境。

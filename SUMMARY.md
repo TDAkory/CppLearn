@@ -13,6 +13,7 @@
     * [understand-auto-type-deduction](basics/effective-modern-c++/1_deducing_type/understand-auto-type-deduction.md)
   * [2_auto](basics/effective-modern-c++/2_auto/readme.md)
     * [1_prefer_auto_to_explicit_type_declarations](basics/effective-modern-c++/2_auto/1_prefer_auto_to_explicit_type_declarations.md)
+    * [2_auto_deduces_undesired_types](basics/effective-modern-c++/2_auto/2_auto_deduces_undesired_types.md)
 * [memory\_management](basics/memory_management/README.md)
   * [allocator-design](basics/memory_management/allocator-design.md)
   * [malloc](basics/memory_management/malloc.md)
