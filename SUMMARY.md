@@ -4,6 +4,8 @@
 
 ## Basics
 
+* [about_template](basics/about_template/README.md)
+  * [01_method_template](basics/about_template/01_about_template.md)
 * [effective-modern-c++](basics/effective-modern-c++/README.md)
   * [1_deducing_type](basics/effective-modern-c++/1_deducing_type/README.md)
     * [README](basics/effective-modern-c++/1_deducing_type/readme.md)
