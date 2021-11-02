@@ -6,6 +6,8 @@
 
 * [About_template](Basics/About_template/README.md)
   * [01\_method_template](Basics/About_template/01\_method_template.md)
+* [Basic_concepts](Basics/Basic_concepts/README.md)
+  * [Trival,standard-layout,POD,literal-types](Basics/Basic_concepts/Trival,standard-layout,POD,literal-types.md)
 * [Effective_modern_c++](Basics/Effective_modern_c++/README.md)
   * [1\_deducing_type](Basics/Effective_modern_c++/1\_deducing_type/README.md)
     * [README](Basics/Effective_modern_c++/1\_deducing_type/readme.md)
