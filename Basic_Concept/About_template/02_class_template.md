@@ -142,3 +142,49 @@ class MyClass<T1*, T2*> {};
 
 ## 缺省模板实参
 
+对于类模板，可以为模板参数定义缺省值：这些值被称为缺省模板参数，且可以引用之前的模板参数。
+
+```cpp
+// Example: 定义第2个模板参数，使用vector<>作为缺省值
+#include <vector>
+#include <stdexcept>
+
+template <typename T, typename CONT = std::vectorM<T> >
+class Stack {
+    private:
+        CONT elems;
+    
+    public:
+        void push(T const&);
+        void pop();
+        T top() const;
+        bool empty() const {
+            return elems.empty();
+        }
+};
+
+template <typename T, typename CONT>
+void Stack<T, CONT>::push(T cosnt &elem) {
+    elems.push_back(elem);
+}
+
+...
+
+
+Stack<int> intStack; // 使用vector<int>
+Stack<double, std::deque<double>> dblStack; // 使用deque<double>
+```
+
+## 小结
+
+* 类模板：在类的实现中，可以有一个或多个类型没有被指定
+
+* 使用类模板，需要传入某个具体类型作为模板参数，编译器会基于该类型来实例化模板
+
+* 只有被调用的成员函数才会被实例化
+
+* 可以用某种特定类型特化类模板
+
+* 可以用某种特定类型局部特化类模板
+
+* 可以为类模板参数定于缺省值，这些值可以引用之前的模板参数
