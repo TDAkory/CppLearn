@@ -258,3 +258,26 @@ class MyClass {
 
 ## 使用字符串作为函数模板的实参
 
+```cpp
+template <typename T>
+inline T const& max(T const &a, T const &b) {   // 注意：引用参数
+    return a < b ? b : a;
+}
+
+template <typename T>
+inline T min(T a, T b) {
+    return a < b ? a : b;
+}
+
+int main() {
+    std::string s;
+
+    ::max("apple", "peach");
+    ::max("apple", "tomato");
+    ::max("apple", s);
+
+    ::min("apple", "peach");
+    ::min("apple", "tomato");
+    ::min("apple", s);
+}
+```
