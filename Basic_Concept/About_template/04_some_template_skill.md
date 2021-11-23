@@ -158,6 +158,7 @@ void Stack<T, CONT>::push(T const &elem) {
 模板的模板参数（template template parameter）是指C++语言程序设计中，一个模板的参数是模板类型。只有类模板允许其模板参数是模板类型；函数模板不允许具有这样的模板参数。
 
 模板的模板参数可以有默认值。例如：
+
 ```cpp
 template <class T = float> struct B {};
 template <template <class TT = float> class T> struct A {
@@ -206,26 +207,26 @@ C<A> c; // V<int> within C<A> uses the primary template, so c.y.x has type int
 * 如果P是一个可变参数模板，即P的模板形参列表包含了模板参数包（template parameter pack），则这个模板参数包应该匹配A中0个或者多个模板参数或者匹配A中的对应的模板参数包。例如：
 
 ```cpp
-template<class T> class A { /* ... */ };
-template<class T, class U = T> class B { /* ... */ };
-template <class ... Types> class C { /* ... */ };
-template<template<class> class P> class X { /* ... */ };
-template<template<class ...> class Q> class Y { /* ... */ };
-X<A> xa; // OK
-X<B> xb; // ill-formed: default arguments for the parameters of a template argument are ignored
-X<C> xc; // ill-formed: a template parameter pack does not match a template parameter
-Y<A> ya; // OK
-Y<B> yb; // OK
-Y<C> yc; // OK  
-template <class T> struct eval;
-template <template <class, class...> class TT, class T1, class... Rest>
-struct eval<TT<T1, Rest...>> { };
-template <class T1> struct A;
-template <class T1, class T2> struct B;
-template <int N> struct C;
-template <class T1, int N> struct D;
-template <class T1, class T2, int N = 17> struct E;
-eval<A<int>> eA; // OK: matches partial specialization of eval
+    template<class T> class A { /* ... */ };
+    template<class T, class U = T> class B { /* ... */ };
+    template <class ... Types> class C { /* ... */ };
+    template<template<class> class P> class X { /* ... */ };
+    template<template<class ...> class Q> class Y { /* ... */ };
+    X<A> xa; // OK
+    X<B> xb; // ill-formed: default arguments for the parameters of a template argument are ignored
+    X<C> xc; // ill-formed: a template parameter pack does not match a template parameter
+    Y<A> ya; // OK
+    Y<B> yb; // OK
+    Y<C> yc; // OK  
+    template <class T> struct eval;
+    template <template <class, class...> class TT, class T1, class... Rest>
+    struct eval<TT<T1, Rest...>> { };
+    template <class T1> struct A;
+    template <class T1, class T2> struct B;
+    template <int N> struct C;
+    template <class T1, int N> struct D;
+    template <class T1, class T2, int N = 17> struct E;
+    eval<A<int>> eA; // OK: matches partial specialization of eval
 ```
 
 ## 零初始化
@@ -272,12 +273,26 @@ inline T min(T a, T b) {
 int main() {
     std::string s;
 
-    ::max("apple", "peach");
-    ::max("apple", "tomato");
-    ::max("apple", s);
+    ::max("apple", "peach");    // ok: 相同类型
+    ::max("apple", "tomato");   // error: 不同类型
+    ::max("apple", s);          // error: 不同类型
 
-    ::min("apple", "peach");
-    ::min("apple", "tomato");
-    ::min("apple", s);
+    ::min("apple", "peach");    // ok: 相同类型
+    ::min("apple", "tomato");   // ok: 退化相同类型
+    ::min("apple", s);          // error: 不同类型
 }
 ```
+
+由于长度的区别，这些字符串属于不通过的数组类型，`apple`和`peach`是`char const[6]`, `tomato`是`char const[7]`;
+
+但是在非引用类型的参数调用时，会发生数组到指针的自动类型转换（decay)。
+
+## 小结
+
+* 如果要访问依赖于模板参数的类型名称，应该在类型名称前添加`typename`
+* 嵌套类和成员函数也可以是模板
+* 赋值运算符的模板版本并没有取代缺省赋值运算符
+* 类模板也可以作为模板参数，称之为模板的模板参数
+* 模板的模板实参必须精确地匹配，匹配的时候不会考虑“模板的模板实参”的缺省模板参数（如std::deque的allocator）
+* 通过显示调用缺省构造函数，确保模板的变量和成员得到一个缺省的初始值
+* 对于字符串，在实参演绎的过程中，当且仅当参数不是引用时，才会出现数组到指针的类型转换
