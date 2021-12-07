@@ -135,4 +135,145 @@ class Node {
     static T *storage;      // ERROR: 模板的模板参数的参数在这里不能被使用
 };
 ```
+
 ## 缺省模板参数
+
+- 只有类声明可以具有缺省模板实参
+- 与缺省的函数参数类似：对于模板参数，只有在其之后的模板参数都提供了缺省实参的情况下，该模板参数才可以声明为缺省模板参数
+- 缺省实参不能重复声明
+
+```cpp
+template <typename T = void>
+class Value;
+
+template <typename T = void>
+class Value;            // ERROR
+```
+
+## 模板实参
+
+在实例化模板时，用来替换模板参数的值，可以通过以下几种方式确定：
+
+- 显式模板实参
+- 注入式类名称
+- 缺省模板实参
+- 实参演绎（推导）
+
+
+### 函数模板实参
+
+```cpp
+template <typename T>
+inline T const & max (T const &a, T const &b) {
+    return a < b ? b : a;
+}
+
+int main() {
+    max<double>(1.0, -3.0); // 显式模板实参
+    max(1.0, -2.0);         // 隐式推断为double
+    max<int>(1.0, 3.0);     // 显式int，禁止推导
+}
+```
+
+对于无法被演绎的参数，最好把这些参数放在模板参数列表的开始处，从而可以显式指定这些参数。
+
+```cpp
+template <typenamt Dst, typename Src>
+inlien Dst implict_cast(Src const &x) {}    // Src可以被推导，Des无法被推导
+```
+
+### 类型实参
+
+- 局部类和局部枚举，不可以作为模板的类型实参
+- 未命名的class类型或者未命名的枚举类型不能作为模板的实参
+
+```cpp
+template <typename T> class List {};
+
+typedef struct {
+    double x, y, z;
+} Point;
+
+typedef enum {red, green, blue} *ColorPtr;
+
+int main() {
+    struct Association {
+        int *p;
+        int *q;
+    };
+
+    List<Association *>error1;  // error: 不可以应用局部类型
+    List<ColorPtr> error2;      // error: 不可以使用未命名的量
+    List<Point> ok;             // ok
+}
+```
+
+### 非类型实参
+
+非类型模板实参是哪些替换非类型参数的值，如下：
+
+- 某一个具有正确类型的非类型模板参数
+- 一个编译期整型常量。只有在参数类型和值类型能够匹配，或者可以隐式转换的前提洗按合法
+- 有单目已婚算法&的外部变量或者函数地址
+- 对于引用类型的非类型模板参数，没有&运算符的外部变量和外部函数
+- 指向成员的指针常量，类似`&C::m`
+
+当实参匹配“指针或引用”的时候，用户定义的类型转换或派生类到基类的类型转换都不会被考虑。即使在其他环境下，这些转换有效，在模板推导中都是无效的。
+
+隐式转换的唯一应用：给实参加上`const` `volatile`
+
+```cpp
+template <typenamt T, T nontype_param>
+class C;
+
+C<int, 33> *c1;     // integer type
+
+int a;
+C<int *,&a> *c2;    // address of an external variable
+
+void f();
+void f(int);
+C<void (*)(int), &f> *c3;   // name of a function
+
+class X {
+    int n;
+    static bool b;
+};
+
+C<bool&, X::b> *c4;         // static class members are acceptable variable
+C<int X::*, &X::n> *c5;     // example of a pointer-to-member constant
+
+template <typename T>
+void func();
+
+C<void(), &func<double>> *c6;   // function template instantiations are functions too
+```
+
+模板实参的一个普遍约束是：**程序构建时，编译器或链接器可以确定实参的值**
+
+一些常值不能作为有效的非类型参数：
+
+- 空指针
+- 浮点型数值
+- 字符串
+
+```cpp
+// 一些错误例子
+template <typename T, T nontype_param>
+class C;
+
+class Base {
+    int i;
+} base;
+
+class Derived : public Base {} derived;
+
+C<Base *, &derived> *err1;      // 错误：不考虑派生类到基类的转换
+
+C<int & base.i> *err2;          // 错误：域运算符.后面的变量不会被看成变量
+
+int a[10];
+C<int *, &a[0]> *err3;          // 错误：单一数组元素的地址不可取
+```
+
+### 模板的模板参数
