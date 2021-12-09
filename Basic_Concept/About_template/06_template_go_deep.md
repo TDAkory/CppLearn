@@ -277,3 +277,121 @@ C<int *, &a[0]> *err3;          // 错误：单一数组元素的地址不可取
 ```
 
 ### 模板的模板参数
+
+必须是一个类模板，本身具有参数，该参数必须精确匹配。在匹配过程汇总，模板的模板实参的缺省模板实参将不会被考虑
+
+```cpp
+// 错误示例
+
+// declares:
+// namespace std {
+//     template<typename T, typename Allocator = allocator<T>>
+//     class list;
+// }
+template<typename T1,
+        typename T2,
+        template<typename> class Container>     // Container expects templates with only one parameter
+class Relation {
+    private:
+        Container<T1> dom1;
+        Container<T2> dom2;
+};
+
+int main() {
+    Relation<int, double, std::list> rel;   // ERROR: list has more than one template parameter
+}
+
+```
+
+通过给模板的模板参数增加一个带有默认值的模板参数，可以解决上述的问题
+
+```cpp
+template<typename T1,
+        typename T2,
+        template<typename T,
+                typename = std::allocator<T>> class Container>
+class Relation {
+    private:
+        Container<T1> dom1;
+        Container<T2> dom2;
+};
+```
+
+### 实参的等价性
+
+当每个对应实参的值都相等时，我们称两组模板实参是相等的。对于类型实参，typedef不会影响比较，参加对比的是原本的类型。对于非类型的整形实参，参加对比的是最终的值，表达式不会影响比较。
+
+从函数模板实例化出来的函数一定不会等于普通函数，即使两者具有相同的类型和名称。
+
+- 从成员函数模板产生的函数永远也不会改写一个虚函数（进一步说明成员函数模板不能是一个虚函数）
+- 从构造函数模板产生的构造函数，无法被视为缺省的拷贝构造函数（拷贝赋值运算符 同理）
+
+### 友元
+
+在模板中：可以命名一个特定的类模板实例为友元
+
+```cpp
+template <typename T>
+class Node;
+
+template <typename T>
+class Tree {
+    friend class Node<T>;
+};
+```
+
+如果要把类模板的实例声明为其他类的友元，该类模板在声明的地方必须是可见的。然而，对于普通类，没有这个要求
+
+```cpp
+template <typename T>
+class Tree {
+    friend class Factory;       // Right: First declaration of Factory is OK
+    friend class Node<T>;       // ERROR: Node is invisible
+};
+```
+
+### 友元函数
+
+不能在友元声明中定义一个模板实例（最多只能定义一个特化）。因此，命名一个实例的友元声明是不能作为定义的。
+
+```cpp
+template<typename T1, typename T2>
+void combine(T1, T2);
+
+class Mixer {
+    friend void combine<>(int&, int&);          // OK
+    friend void combine<int, int>(int, int);    // OK
+    friend void combine<char>(char, int)        // OK
+    friend void combine<char>(char&, int);      // Not OK, mismatch
+    friend void combine<>(long, long){...}      // Not OK, definition not allowed!!!
+};
+```
+
+如果在类模板中定义一个友元函数，对于任何只在模板内部声明的实体，只有在模板实例化之后，才会是一个具体实体。那么当类模板实例化多次，会出现函数重复定义的问题。解决的办法是在友元函数的定义中，包含类模板的模板参数。
+
+```cpp
+template<typename T>
+class Creator {
+    friend void feed(Creator<T> *){...}     // 非受限函数，仍然是一个普通函数
+};
+
+Creator<void> one;      // ::feed(Creator<void> *)
+Creator<double> two;    // ::feed(Creator<double> *)
+```
+
+### 友元模板
+
+```cpp
+class Manager {
+    template <typename T>
+        friend class Task;              // 模板的所有实例都成为友元
+    template <typename T>
+        friend void Schedule<T>::dispatch(Task<T> *);
+    template <typename T>
+        friend int ticket() {           // 在友元模板声明的是一个非受限函数名称，且没有紧跟尖括号，改友元模板声明才能成为定义
+            return ++Manager::counter;
+        }
+
+    static int counter;
+};
+```
