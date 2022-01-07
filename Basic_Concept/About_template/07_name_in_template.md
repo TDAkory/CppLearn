@@ -58,6 +58,7 @@ ADL只能应用于非受限名称。在函数调用中，这些名称看起来�
 
 **ADL会在所有的associated class和associated namespace中依次地查找，就好像依次地直接使用这些名字空间进行限定一样。唯一的例外情况是：它会忽略using指示符**
 
+
 ```cpp
 namespace X {
     template<typename T> void f(T);
@@ -134,3 +135,44 @@ int main()
 
 
 ### 插入式类名称
+
+如果在类本身的作用域中插入该类的名称，则称其为插入式类名称。它可以被看作位于该类作用域中的一个非受限名称，而且是可访问的名称。
+
+```cpp
+int C;
+
+class C {
+private:
+    int i[2];
+
+public:
+    static int f() {
+        return sizeof(C);
+    }
+};
+
+int f() {
+    return sizeof(C);
+}
+
+int main() {    // 成员函数C::f()返回类型C的大小，而函数::f()返回变量C的大小
+    std::cout << "C::f() = " << C::f() << ", "
+              << "::f() = " << ::f() << std::endl;
+}
+```
+
+类模板也可以具有插入式类名称。
+
+```cpp
+template <template<typename> class TT> class X {};
+
+template <typename T> class C {
+    C *a;       // right, 等价于 C<T> *a
+    C<void> b;  // right
+    X<C> c;     // wrong, 后面没有模板实参列表的C不被看作模板
+    X<::C> d;   // wrong <:是[的另一种标记
+    X< ::C> e;  // 正确 在< 和 ::之间的空格是必须的
+};
+```
+
+### 解析模板
