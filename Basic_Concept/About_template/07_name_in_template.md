@@ -175,4 +175,116 @@ template <typename T> class C {
 };
 ```
 
-### 解析模板
+## 解析模板
+
+### 非模板中的上下文相关性
+
+解析理论主要是面向上下文无关语言的，C++是上下文相关语言。为此，C++编译器会使用符号表把扫描器和解析器结合起来。
+
+maximum match扫描原则：C++实现应该让一个标记具有尽可能多的字符。例如`<<> >`, `< ::>`
+
+当类型名称具有以下性质时，需要增加`typename`前缀：
+
+- 名称出现在模板中
+- 名称是受限的
+- 名称不是用于指定基类继承的列表中，也不是位于引入构造函数的成员初始化列表中
+- 名称依赖模板参数
+
+### 依赖类型名称
+
+```cpp
+template <typename T>
+class Shell {
+    public:
+        template<int N>
+        class In {
+            public:
+                template <int M>
+                class Deep {
+                    public:
+                        virtual void f();
+                };
+        };
+};
+
+template<typename T, int N>
+class Weird {
+    public：
+        void case1(typename Shell<T>::template In<N>::template Deep<N>* p) {
+            p->template Deep<N>::f();   // 禁止虚函数调用
+        }
+        void case2(typename Shell<T>::template In<N>::template Deep<N>& p) {
+            p.template Deep<N>::f();    // 禁止虚函数调用
+        }
+}
+```
+
+这里给出了何时需要在运算符（`::` `.` `->`）后面用关键字`template`。如果限定符号前面的名称的类型需要依赖于某个模板参数，并且紧接着限定符后面的是一个template-id，则需要使用`template`关键字：
+
+如果没有`template`，则`p.Deep<N>::f()`会解析为`((p.Deep) < N )> f()`
+
+### using-declaration中的依赖性名称
+
+using-declaration会从类和名字空间引入名称。
+
+实际上，从类中引入的能力是有限的，只能把基类的名称引入到派生类中。但这也可能破坏访问级别的声明。
+
+```cpp
+template <typename T>
+class BXT {
+    public:
+        typedef T Mystery;
+        template <typename U>
+        struct Magic;
+};
+
+template <typename T>
+class DXTT : private BXT<T> {
+    public:
+        using typename BXT<T>::Mystery;
+        Mystery *p // 如果上面不使用typename，将会是一个语法错误
+};
+```
+
+但是，C++标准并没有提供一个相似的机制，来指定依赖名称是一个模板
+
+```cpp
+template<typename T>
+class DXTM : private BXT<T> {
+    public:
+        using BXT<T>::template Magic;   // 错误，非标准的
+        Magic<T>* plink;                // 语法错误，Magic不是已知模板
+}
+```
+
+## 派生和类模板
+
+### 非依赖型基类
+
+指无需知道模板实参就可以完全确定类型的基类
+
+```cpp
+template<typename X>
+class Base {
+    public:
+        int basefield;
+        typedef int T;
+};
+
+class D1 : public Base<Base<void>> {    // D1实际上不是类模板
+    public:
+        void f() { basefield = 3; }
+};
+
+template<typename T>
+class D2 : public Base<double> {        // 非依赖型基类
+    public:
+        void f() { basefield = 7; }     // 正常访问继承成员
+        T storage;                      // T是Base<double>::T, 而不是模板参数
+};
+```
+
+对于模板中的非依赖型基类而言，如果在它的派生类中查找一个非受限名称，会先查找到这个非依赖型基类。
+
+### 依赖型基类
+
