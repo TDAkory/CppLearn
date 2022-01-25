@@ -11,7 +11,6 @@
 
 int x;
 class B {
-public:
     int i;
 }; 
  
@@ -57,7 +56,6 @@ ADL只能应用于非受限名称。在函数调用中，这些名称看起来�
 - 对于类X的成员指针类型，除了包括成员相关的associated anmespace和associated calss，该集合还包括与X相关的associated namespace和associated class。
 
 **ADL会在所有的associated class和associated namespace中依次地查找，就好像依次地直接使用这些名字空间进行限定一样。唯一的例外情况是：它会忽略using指示符**
-
 
 ```cpp
 namespace X {
@@ -114,7 +112,7 @@ class Wrapper
 {
 private:
     T object;
-public:
+
     Wrapper(T obj) : object(obj) { // 可以把T隐式转型为Wrapper<T>
     }
     friend void f(Wrapper<T> const& a) {
@@ -195,27 +193,26 @@ maximum match扫描原则：C++实现应该让一个标记具有尽可能多的�
 ```cpp
 template <typename T>
 class Shell {
-    public:
-        template<int N>
-        class In {
-            public:
-                template <int M>
-                class Deep {
-                    public:
-                        virtual void f();
-                };
+    
+    template<int N>
+    class In {
+        
+        template <int M>
+        class Deep {
+            
+            virtual void f();
         };
+    };
 };
 
 template<typename T, int N>
 class Weird {
-    public：
-        void case1(typename Shell<T>::template In<N>::template Deep<N>* p) {
-            p->template Deep<N>::f();   // 禁止虚函数调用
-        }
-        void case2(typename Shell<T>::template In<N>::template Deep<N>& p) {
-            p.template Deep<N>::f();    // 禁止虚函数调用
-        }
+    void case1(typename Shell<T>::template In<N>::template Deep<N>* p) {
+        p->template Deep<N>::f();   // 禁止虚函数调用
+    }
+    void case2(typename Shell<T>::template In<N>::template Deep<N>& p) {
+        p.template Deep<N>::f();    // 禁止虚函数调用
+    }
 }
 ```
 
@@ -232,17 +229,15 @@ using-declaration会从类和名字空间引入名称。
 ```cpp
 template <typename T>
 class BXT {
-    public:
-        typedef T Mystery;
-        template <typename U>
-        struct Magic;
+    typedef T Mystery;
+    template <typename U>
+    struct Magic;
 };
 
 template <typename T>
 class DXTT : private BXT<T> {
-    public:
-        using typename BXT<T>::Mystery;
-        Mystery *p // 如果上面不使用typename，将会是一个语法错误
+    using typename BXT<T>::Mystery;
+    Mystery *p // 如果上面不使用typename，将会是一个语法错误
 };
 ```
 
@@ -251,9 +246,8 @@ class DXTT : private BXT<T> {
 ```cpp
 template<typename T>
 class DXTM : private BXT<T> {
-    public:
-        using BXT<T>::template Magic;   // 错误，非标准的
-        Magic<T>* plink;                // 语法错误，Magic不是已知模板
+    using BXT<T>::template Magic;   // 错误，非标准的
+    Magic<T>* plink;                // 语法错误，Magic不是已知模板
 }
 ```
 
@@ -261,30 +255,69 @@ class DXTM : private BXT<T> {
 
 ### 非依赖型基类
 
-指无需知道模板实参就可以完全确定类型的基类
+指无需知道模板实参就可以完全确定类型的基类，也就是说，基类名称是用非依赖型名称来表示的。
 
 ```cpp
 template<typename X>
 class Base {
-    public:
-        int basefield;
-        typedef int T;
+    int basefield;
+    typedef int T;
 };
 
 class D1 : public Base<Base<void>> {    // D1实际上不是类模板
-    public:
-        void f() { basefield = 3; }
+    void f() { basefield = 3; }
 };
 
 template<typename T>
 class D2 : public Base<double> {        // 非依赖型基类
-    public:
-        void f() { basefield = 7; }     // 正常访问继承成员
-        T storage;                      // T是Base<double>::T, 而不是模板参数
+    void f() { basefield = 7; }     // 正常访问继承成员
+    T storage;                      // T是Base<double>::T, 而不是模板参数
 };
 ```
 
-对于模板中的非依赖型基类而言，如果在它的派生类中查找一个非受限名称，会先查找到这个非依赖型基类。
+对于模板中的非依赖型基类而言，如果在它的派生类中查找一个非受限名称，会先查找到这个非依赖型基类，因此T一直对应`Base<double>::T`，也就是`int`。
 
 ### 依赖型基类
 
+**对于模板中的非依赖型名称，将会在看到的第一时间进行查找**
+
+```cpp
+template<typename T>
+class DD : public Base<T> {
+    void f() { basefiled = 0; } // 1. 发现引用了非依赖名称，必须马上查找，假设在模板Base中找到它，并根据Base声明将它绑定为int变量
+};
+
+template<>
+class Base<bool> {
+    enum { basefield = 42 };    // 2. 显示特化中，改变了成员basefield的含义，是一个不可修改的常量
+};
+
+void g(DD<bool> &d) {
+    d.f();      // 3. 编译器给出错误信息
+}
+```
+
+为了解决这个问题，标准C++声明：**非依赖型名称不会再依赖型基类中进行查找（但仍然是看到之后马上查找）**
+
+因此实际上，1处编译器会给出诊断信息，为了纠正，可以让`basefield`成为依赖型名称。
+
+```cpp
+// Option-1
+template<typename T>
+class DD1 : public Base<T> {
+     void f() { this->basefield = 0; }   // 查找被延迟了
+};
+
+// Option-2
+template<typename T>
+class DD2 : public Base<T> P {
+    void f() { Base<T>::basefield = 0; }    // 若basefield是用于虚函数调用，该方法会禁止虚函数调用，因此会改变程序含义
+}；
+
+// Option-3
+template<typename T>
+class DD3 : public Base<T> {
+    using Base<T>::basefield;   // 依赖型名称现在位于这个作用域
+    void f() { basefield = 0; } // 查找成功，找到上一行。上一行在实例化时才确定
+};
+```

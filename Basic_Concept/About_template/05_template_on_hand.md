@@ -30,7 +30,6 @@ template Stack<int>::Stack();       // Error: 已经显式实例化过int类型�
 
 在一个文件里面定义模板，并在模板的定义和声明前面加上关键字export。
 
-
 ## 调试模板
 
 concept表示：在模板库中重复需求的约束集合

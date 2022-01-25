@@ -34,13 +34,13 @@ void PrintBitSet(std::bitset<N> const &bs) {
 ```cpp
 template <typename T>
 class Base {
-    public:
+    
         void exit();
 };
 
 template <tyepname T>
 class Derived : Base<T> {
-    public:
+    
         void foo() {
             exit();     // 调用外部的exit()或出现错误
         }
@@ -63,7 +63,7 @@ class Stack {
     private:
         std::deque<T> elems;
     
-    public:
+    
         void push(T const&);
         ...
         // 使用元素类型为T2的栈赋值
@@ -112,7 +112,7 @@ class Stack {
     private:
         CONT<T> elems;
     
-    public:
+    
         void push(T const&);
         void pop();
         T top() const;
@@ -251,7 +251,7 @@ template <typename T>
 class MyClass {
     private:
         T x;
-    public:
+    
         MyClass() : x() {}
         ...
 };

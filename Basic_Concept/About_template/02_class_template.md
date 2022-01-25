@@ -6,7 +6,7 @@ class Stack {
     private:
         std::vector<T> elems;
     
-    public:
+    
         Stack();
         void push(T const &);
         void pop();
@@ -68,9 +68,9 @@ T Stack<T>::top() const {
 
 ## 类模板的特化
 
-可以用模板实参来特化类模板，通过特化，可以优化基于某种类型的实现，或者客服某种特定类型在实例化类模板时的差异。
+可以用模板实参来特化类模板，通过特化，可以优化基于某种类型的实现，或者克服某种特定类型在实例化类模板时的差异。
 
-如果要特化一个类模板，需要特化改类模板的所有成员函数。
+如果要特化一个类模板，需要特化该类模板的所有成员函数。
 
 ```cpp
 template <>
@@ -87,7 +87,7 @@ class Stack<std::string> {
     private:
         std::deque<std::string> elems;
     
-    public:
+    
         void push(std::string const &);
         void pop();
         std::string top() const;
@@ -154,7 +154,7 @@ class Stack {
     private:
         CONT elems;
     
-    public:
+    
         void push(T const&);
         void pop();
         T top() const;

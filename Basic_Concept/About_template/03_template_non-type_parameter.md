@@ -11,7 +11,7 @@ class Stack {
         T elems[MAXSIZE];
         int numElems;
 
-    public:
+    
         Stack();
     ...
 };

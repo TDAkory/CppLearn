@@ -5,8 +5,7 @@
 ```cpp
 template <typename T>
 class List {            // 外部作用域的类模板
-    public:
-        template <typename T2> List(List<T2> const &);  // 成员函数模板
+    template <typename T2> List(List<T2> const &);  // 成员函数模板
 };
 
 template <typename T>
@@ -58,10 +57,9 @@ void fill(Array<T> *, T const & = T());     // T() is zero for built-in types
 
 显然，当fill函数被调用时，如果提供了第2个函数调用参数的话，就不会实例化这个确实实参。即：即使不能基于特定类型T来实例化缺省调用实参，可能也不会出现错误。如：
 
-```
+```cpp
 class Value {
-    public:
-        Value(int);
+    Value(int);
 };
 
 void init(Array<Value> *array) {
