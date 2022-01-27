@@ -21,6 +21,8 @@
     - [Function Try Blocks](#function-try-blocks)
     - [Function Try Block for a Constructor](#function-try-block-for-a-constructor)
     - [New in C++11](#new-in-c11)
+    - [**Guideline-2**](#guideline-2)
+    - [noexcept](#noexcept)
 
 ## What's the Problem?
 
@@ -262,3 +264,33 @@ try {
     std::rethrow_if_nested(ex);     // One call does all these steps
 }
 ```
+
+### **Guideline-2**
+
+Do not use dynamic exception specifications
+
+### noexcept
+
+- noexcept specification (of a function) 
+
+    > [noexcept异常说明及其使用](https://blog.csdn.net/qianqin_2014/article/details/51321631)
+
+    ```cpp
+    void F();   // may throw anything
+    void G() noexcept(Boolean constexpr);    
+    void G() noexcept;  // default to noexcept(true)
+    ```
+
+    Destructors are noexcept by default
+
+- noexcept operator
+
+    ```cpp
+    static_assert(noexcept(2+3), "");   // true
+    static_assert(not noexcept(throw 23), "");  //true
+    inline int Foo() { return 0;}
+    static_assert(noexcept(Foo()), ""); // false
+
+    inline int Foo() noexcept { return 0;}
+    static_assert(noexcept(Foo()), ""); // true
+    ```
