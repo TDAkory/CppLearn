@@ -13,16 +13,20 @@
     - [Right way](#right-way)
     - [Exception-Safety Guarantees(Abrahams)](#exception-safety-guaranteesabrahams)
   - [Mechanics](#mechanics)
+    - [**Guidelines From Below**](#guidelines-from-below)
     - [How exceptions work in C++](#how-exceptions-work-in-c)
       - [Error detection / throw](#error-detection--throw)
       - [Error handling / catch](#error-handling--catch)
-    - [**Guideline-1**](#guideline-1)
     - [Performance Cost of try/catch](#performance-cost-of-trycatch)
     - [Function Try Blocks](#function-try-blocks)
     - [Function Try Block for a Constructor](#function-try-block-for-a-constructor)
     - [New in C++11](#new-in-c11)
-    - [**Guideline-2**](#guideline-2)
     - [noexcept](#noexcept)
+    - ["Terminate" Handler](#terminate-handler)
+      - [How to not "Terminate"](#how-to-not-terminate)
+    - [Safe Objects](#safe-objects)
+      - [Object Lifetimes](#object-lifetimes)
+      - [Aborted Construction](#aborted-construction)
 
 ## What's the Problem?
 
@@ -80,6 +84,15 @@
 
 ## Mechanics
 
+### **Guidelines From Below**
+
+- Throw by value, Catch by reference
+- Do not use dynamic exception specifications
+- Destructors must not throw
+  - Mst deliver the No-Throw Guarantee
+  - Cleanup must always be safe
+  - May throw internally, but may not emit
+
 ### How exceptions work in C++
 
 #### Error detection / throw
@@ -133,11 +146,6 @@ catch (A const volatile &) {}
 catch (void *) {}   // if A is a pointer
 catch (...) {}
 ```
-
-### **Guideline-1**
-
-- Throw by value
-- Catch by reference
 
 ### Performance Cost of try/catch
 
@@ -265,10 +273,6 @@ try {
 }
 ```
 
-### **Guideline-2**
-
-Do not use dynamic exception specifications
-
 ### noexcept
 
 - noexcept specification (of a function) 
@@ -294,3 +298,44 @@ Do not use dynamic exception specifications
     inline int Foo() noexcept { return 0;}
     static_assert(noexcept(Foo()), ""); // true
     ```
+
+### ["Terminate" Handler](https://en.cppreference.com/w/cpp/error/terminate_handler)
+
+> [std::set_terminate](https://en.cppreference.com/w/cpp/error/set_terminate)
+
+- Called when re-throw and there is no exception
+- Called when a "noexcept" function throws
+- Called when throwing when there is already an exception being thrown
+- Called on un-handling exception
+
+#### How to not "Terminate"
+
+- Don't re-throw outside of a catch block
+- Don't throw from a "noexcpt" function
+- Don't throw when an exception is being thrown
+
+### Safe Objects
+
+#### Object Lifetimes
+
+- Order of construction:
+  - Base class objects
+    - As listed in the type definition, left to right
+  - Data members
+    - As listed in the type definition, top to bottom
+    - Not as listed in the constructor’s initializer list
+  - Constructor body
+- Order of destruction:
+  - Exact reverse order of construction
+
+#### Aborted Construction
+
+- How?
+  - Throw from Constructor of base class, constructor of data member, constructor body
+- What do we need to clean up?
+  - Base class objects? NO
+  - Data members? NO
+  - Constructor Body? YES
+    - We need to clean up anything we do here because the destructor will not be called, as long as object lifetime begins at the end of constructor.
+  - What about new array?
+    - like above, complete constructor
