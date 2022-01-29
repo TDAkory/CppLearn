@@ -102,7 +102,7 @@
   - One responsibility per object
 - All cleanup code is called from a destructor
   - An object with such a destructor must be put on the stack as soon as calling the cleanup code become a responsibility
-- Create `swap()` for value classes
+- Create/support `swap()` for value classes
   - Must deliver the No-Throw guarantee
 
 ### How exceptions work in C++
@@ -393,3 +393,15 @@ namespace std {
   - Don't use const of reference data members
     - These are not swap-able
 
+Check swap at compile time
+
+```cpp
+template<typename T>
+void check_swap(T *const t = 0) {
+  static_assert(noexcept(delete t), "msg...");
+  static_assert(noexcept(T(std::move(*t))), "msg...");
+  static_assert(noexcept(*t = std::move(*t)), "msg...");
+  using std::swap;
+  static_assert(noexcept(swap(*t, *t)), "msg...");
+}
+```
