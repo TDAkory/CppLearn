@@ -27,6 +27,10 @@
     - [Safe Objects](#safe-objects)
       - [Object Lifetimes](#object-lifetimes)
       - [Aborted Construction](#aborted-construction)
+    - [RAII(Resource Acquisition Is Initialization)](#raiiresource-acquisition-is-initialization)
+      - [What happens to the object if acquisition fails?](#what-happens-to-the-object-if-acquisition-fails)
+      - [RAII Cleanup](#raii-cleanup)
+    - [swap()](#swap)
 
 ## What's the Problem?
 
@@ -92,6 +96,14 @@
   - Mst deliver the No-Throw Guarantee
   - Cleanup must always be safe
   - May throw internally, but may not emit
+- Assign ownership of every resource immediately upon allocation, to a named manager object that manages no other resources
+- Use RAII
+  - Every responsibility is an object
+  - One responsibility per object
+- All cleanup code is called from a destructor
+  - An object with such a destructor must be put on the stack as soon as calling the cleanup code become a responsibility
+- Create `swap()` for value classes
+  - Must deliver the No-Throw guarantee
 
 ### How exceptions work in C++
 
@@ -339,3 +351,45 @@ try {
     - We need to clean up anything we do here because the destructor will not be called, as long as object lifetime begins at the end of constructor.
   - What about new array?
     - like above, complete constructor
+
+### [RAII(Resource Acquisition Is Initialization)](https://en.cppreference.com/w/cpp/language/raii)
+
+#### What happens to the object if acquisition fails?
+
+- The object never exists
+- If you have the object, you have the resource
+- If the attempt to get the resource failed, then the constructor threw and we don't have the object
+
+#### RAII Cleanup
+
+- Destructors have resource release responsibility
+- Some objects may have a "release" member function
+- Cleanup cannot throw
+
+### swap()
+
+- No Throw swapping is a key exception-safety tool
+
+```cpp
+struct Bight {
+  ...
+  void swap(Bight &) {  // No Throw
+    // swap bases, then members
+  } 
+};
+
+namespace std {
+  template<> void swap<Bight>(Bight &a, Bight &b) {
+    a.swap(b);
+  }
+}
+```
+
+- `std::swap<>()` is always an option
+  - But it doesn't promise No-Throw
+    - It does three copies --- Copies can fail
+- Pur custom swaps can be No Throw
+  - Don't use non-swapping base / member classes
+  - Don't use const of reference data members
+    - These are not swap-able
+
