@@ -168,6 +168,7 @@ int main()
 ```
 
 ## Literal types
+
 A literal type is one whose layout can be determined at compile time. The following are the literal types:
 
 * void
@@ -175,3 +176,4 @@ A literal type is one whose layout can be determined at compile time. The follow
 * references
 * Arrays of void, scalar types or references
 * A class that has a trivial destructor, and one or more constexpr constructors that are not move or copy constructors. Additionally, all its non-static data members and base classes must be literal types and not volatile.
+* 
