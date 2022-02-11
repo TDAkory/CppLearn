@@ -84,3 +84,60 @@ int main() {     // Tricky实例化，int 替换 T， 0 替换 N
 ```
 
 - 在main之前，编译器会**基于假设参数出于最理想的情况**，来编译模板定义，检查语法约束和一般的语义约束
+
+## C++实例化模型
+
+### 两阶段查找
+
+对模板进行解析的时候，编译器并不能解析依赖型名称。于是，编译器会在POI(Point of instantiation, 实例化点)再次查找这些依赖型名称
+
+非依赖型名称在首次看到模板的时候就进行查找，因为在第一次查找的时候就可以诊断错误信息
+
+由此得出两阶段查找的概念：**模板解析阶段 & 模板实例化阶段**
+
+### [POI](https://stackoverflow.com/questions/3866215/what-is-poi-and-what-does-it-mean)
+
+通俗理解就是代码中的一个点，在这个点会插入替换后的模板实例
+
+```cpp
+class MyInt {
+    MyInt(int i);
+};
+
+MyInt operator-(MyInt const &);
+
+bool operator>(MyInt const&, MyInt const&);
+
+typedef MyInt Int;
+
+template<typename T>
+void f(T i) {
+    if (i > 0) {
+        g(-i);
+    }
+}
+// 1，函数g不可见
+void g(Int) {
+    // 2，不能作为POI，不允许模板定义在这里插入
+    f<Int>(42); // point fo call，编译器看到这里，知道模板函数f需要用MyInt来实例化，即生成一个POI
+    // 3
+}
+// 4，函数g可见，对于执行非类型特化的引用，C++把它的POI定义在“包含这个引用的定义或声明之后的最近名字空间域”。即4
+```
+
+在POI执行第二次查找时，指g(-i)，只是使用了ADL。基本类型int没有关联名字空间，因此如果使用int，就不会发生ADL，也就不能找到函数g，将无法通过编译。
+
+```cpp
+// 对于类特化
+template<typename T>
+class S {
+    T m;
+};
+// 5，对于指向产生自模板的类实例的引用，它的POI定义“包含这个实例引用的定义或声明之前的最近名字空间域”，即5
+unsigned long h() {
+    // 6
+    return (unsigned long)sizeof(S<int>);
+    // 7
+}
+// 8，若POI在这里，sizeof(S<int>)会无效，因为要等编译到8，才能确定S<int>的大小，但是代码就在8之前
+```
