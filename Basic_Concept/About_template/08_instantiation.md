@@ -141,3 +141,26 @@ unsigned long h() {
 }
 // 8，若POI在这里，sizeof(S<int>)会无效，因为要等编译到8，才能确定S<int>的大小，但是代码就在8之前
 ```
+
+```cpp
+template<typename T>
+class S {
+    typedef int I;
+};
+
+// 1
+template<typename T>
+void f() {
+    S<char>::I car1 = 41;
+    typename S<T>::I var2 = 42;
+}
+
+int main() {
+    f<double>();
+}// 2: 2a, 2b
+```
+`f<double>`的POI在2处，它引用了类特化`S<char>`，雷特和的POI在1处。另外，函数模板还引用了`S<T>`：因为`S<T>`是依赖型的，所以不能像`S<char>`来确定POI
+
+对于非类型实体，二次POI的位置和主POI(`f<double>`)的位置相同；对于类型实体，二次POI的位置位于主POI位置的紧前处。
+
+因此`S<double>`在2a，`f<double>`在2b
