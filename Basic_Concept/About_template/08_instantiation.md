@@ -164,3 +164,62 @@ int main() {
 对于非类型实体，二次POI的位置和主POI(`f<double>`)的位置相同；对于类型实体，二次POI的位置位于主POI位置的紧前处。
 
 因此`S<double>`在2a，`f<double>`在2b
+
+在实际应用中，大多数编译器会延迟非内联函数模板的实例化，知道翻译单元末尾才进行真正的实例化。
+
+### 包含模型和分离模型
+
+当遇到POI的时候，编译器要求相应模板的定义必须是可见的。
+
+将模板定义在头文件中，在需要使用到的地方#include这个头文件，属于包含模型
+
+使用export关键字来声明非类型模板，在另一个翻译单元中定义该非类型模板，属于分离模型。
+
+```cpp
+// 翻译单元1
+#include <iostream>
+export template<typename T>
+T const &max(T const&, T const&)
+
+int main() {
+    std::cout << max(a, b);
+}
+
+// 翻译单元2
+export template<typename T>
+T const &max(T const& a, T const& b) {
+    return a < b ? b : a;
+}
+```
+
+### 跨翻译单元查找
+
+如果将翻译单元1做如下修改
+
+```cpp
+// 翻译单元1
+#include <iostream>
+
+export template<typename T> T const& max(T const&, T const&);
+
+namespace N {
+    class I {
+        I(int i) : v(i) {}
+        int v;
+    };
+
+    bool operator<(I const& a, I const& b) {
+        return a.v < b.v;
+    }
+}
+
+int main() {
+    std::cout << max(N::I(7), N::I(42)).v << std::endl; // (3)
+}
+```
+
+解析模板需要的模板定义和类型I定义分别位于两个编译单元，编译器需要进行两个阶段的查找：
+
+第一阶段，在解析模板（即第一次看到模板定义）的时候，使用普通查找规则和ADL规则对非依赖型名称Inc查找。非受限的依赖型函数名称先使用普通的查找规则进行查找，缓存查找结果，在这个过程中不会进行重载解析。
+
+第二阶段，在POI的时候，使用普通查找规则和ADL来查找依赖型首先名称，依赖型非受限名称仅使用ADL规则查找，然后将其结果与一阶段结果合并组成函数集合，进行重载解析。
