@@ -209,4 +209,3 @@ protected:            \
 #define IMPLEMETN_POOL_ALLOC(class_name) \
 Allocator class_name::myAlloc;
 ```
-
