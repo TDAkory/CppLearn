@@ -14,6 +14,10 @@ description: c++ world
 - [Devirtualization in LLVM and Clang](https://blog.llvm.org/2017/03/devirtualization-in-llvm-and-clang.html)
 - [chromium sorce](https://source.chromium.org/chromium/chromium/src)
 
+## Reading Materials
+
+- [Somethings fun for Read](https://github.com/MattPD/cpplinks)
+
 ## Q&A
 
 - [call-to-lambda-is-ambiguous-despite-explicitly-stating-the-return-type](https://stackoverflow.com/questions/58627109/call-to-lambda-is-ambiguous-despite-explicitly-stating-the-return-type)
