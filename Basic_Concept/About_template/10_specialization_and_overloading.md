@@ -150,3 +150,48 @@ int main()
 ## 显式特化
 
 类模板是不可以被重载的，但我们可以选择另一种机制来实现这种透明的自定义类模板的能力，就是显式特化。
+
+类模板和函数模板都是可以被全局特化的。
+
+### 全局的类模板特化
+
+```cpp
+template<typename T>
+class S {
+    void info() { std::cout << "generic (S<T>::info())"; }
+};
+
+template<>
+class S<void> {
+    void msg() { std::cout << "fully specialized (S<void>::msg())"; }   // 全局特化与原来的实现可以毫无关联。只有类模板的名字有关联
+};
+```
+
+```cpp
+// 指定的模板实参列表必须和响应的模板参数列表一一对应
+template<typename T>
+class Types {
+    typedef int I;
+};
+
+template<typename T, typename U = typename Types<T>::I>
+class S;    // 1
+
+template<>
+class S<void> {
+    void f();       // 2
+};
+
+template<> class S<char, char>;     // 3
+
+template<> class S<char, 0>;    // 错误，不能用0替换U
+
+int main() {
+    S<int> *pi;         // 正确，使用1，这里不需要定义
+    S<int> e1;          // 错误，使用1，需要定义，但是找不到定义
+    S<void> *pv;
+    S<void, int> sv;
+    S<void, char> e2;
+    S<char, char> e3;
+}
+```
