@@ -23,7 +23,13 @@ description: c++ world
 - [HTTP and WebSocket built on Boost.Asio in C++11](https://github.com/boostorg/beast)
 - [chromium sorce](https://source.chromium.org/chromium/chromium/src)
 
+## Perf Read Lists
+
+- [动态追踪计数原理](https://zhuanlan.zhihu.com/p/298528948)
+- [folly/tracing](https://github.com/facebook/folly/tree/main/folly/tracing)
+
 ## Q&A
 
 - [call-to-lambda-is-ambiguous-despite-explicitly-stating-the-return-type](https://stackoverflow.com/questions/58627109/call-to-lambda-is-ambiguous-despite-explicitly-stating-the-return-type)
 - [Darts: Double-ARray Trie System](https://www.52nlp.cn/darts-double-array-trie-system-%E7%BF%BB%E8%AF%91%E6%96%87%E6%A1%A3)
+
