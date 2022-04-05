@@ -1,12 +1,21 @@
 # [libevent](https://libevent.org/)
 
 - [libevent](#libevent)
-  - [参考资料](#参考资料)
-  - [源码分析笔记](#源码分析笔记)
-    - [跨平台配置生成](#跨平台配置生成)
-    - [日志支持](#日志支持)
-    - [内存处理](#内存处理)
-      - [注意事项](#注意事项)
+	- [参考资料](#参考资料)
+	- [源码分析笔记](#源码分析笔记)
+		- [跨平台配置生成](#跨平台配置生成)
+		- [日志支持](#日志支持)
+		- [内存处理](#内存处理)
+			- [注意事项](#注意事项)
+		- [多线程支持](#多线程支持)
+			- [锁结构](#锁结构)
+			- [锁类型](#锁类型)
+			- [锁模式](#锁模式)
+			- [多平台支持](#多平台支持)
+			- [定制顺序](#定制顺序)
+			- [Debug支持](#debug支持)
+		- [容器](#容器)
+			- [tail queues](#tail-queues)
 
 ## 参考资料
 
@@ -188,3 +197,145 @@ event_set_mem_functions(void *(*malloc_fn)(size_t sz),
 * realloc函数应该正确处理realloc(ptr, 0)（也就是当作free(ptr)处理）
 * 如果在多个线程中使用libevent，替代的内存管理函数需要是线程安全的
 * 如果要释放由Libevent函数分配的内存，并且已经定制了malloc和realloc函数，那么就应该使用定制的free函数释放。否则将会C语言标准库的free函数释放定制内存分配函数分配的内存，这将发生错误。所以三者要么全部不定制，要么全部定制。
+
+### 多线程支持
+
+`include/event2/thread.h`,`evthread-internal.h`,`evthread_pthread.c`,`evthread_win32.c`,`evthread.c`是多线程支持的相关实现。
+
+`libevent`默认不开多线程功能。与内存管理的hook类似，所有线程相关的函数必须在event_base被创建之前注册。通过
+`event_use_windows_threads()`或者`event_use_pthreads()`来注册使用`Windows threads`或者`Posix threads`。如果需要使用其他线程库，则需要`evthread_set_lock_callbacks()`和 `evthread_set_condition_callbacks()`来注册回调。
+
+#### 锁结构
+
+```cpp
+/** This structure describes the interface a threading library uses for
+ * locking.   It's used to tell evthread_set_lock_callbacks() how to use
+ * locking on this platform.
+ */
+struct evthread_lock_callbacks {
+	/** The current version of the locking API.  Set this to
+	 * EVTHREAD_LOCK_API_VERSION */
+	int lock_api_version;
+	/** Which kinds of locks does this version of the locking API
+	 * support?  A bitfield of EVTHREAD_LOCKTYPE_RECURSIVE and
+	 * EVTHREAD_LOCKTYPE_READWRITE.
+	 *
+	 * (Note that RECURSIVE locks are currently mandatory, and
+	 * READWRITE locks are not currently used.)
+	 **/
+	unsigned supported_locktypes;
+	/** Function to allocate and initialize new lock of type 'locktype'.
+	 * Returns NULL on failure. */
+	void *(*alloc)(unsigned locktype);
+	/** Funtion to release all storage held in 'lock', which was created
+	 * with type 'locktype'. */
+	void (*free)(void *lock, unsigned locktype);
+	/** Acquire an already-allocated lock at 'lock' with mode 'mode'.
+	 * Returns 0 on success, and nonzero on failure. */
+	int (*lock)(unsigned mode, void *lock);
+	/** Release a lock at 'lock' using mode 'mode'.  Returns 0 on success,
+	 * and nonzero on failure. */
+	int (*unlock)(unsigned mode, void *lock);
+};
+```
+
+#### 锁类型
+
+```cpp
+/**
+   @name Types of locks
+
+   @{*/
+/** A recursive lock is one that can be acquired multiple times at once by the
+ * same thread.  No other process can allocate the lock until the thread that
+ * has been holding it has unlocked it as many times as it locked it. */
+#define EVTHREAD_LOCKTYPE_RECURSIVE 1
+/* A read-write lock is one that allows multiple simultaneous readers, but
+ * where any one writer excludes all other writers and readers. */
+#define EVTHREAD_LOCKTYPE_READWRITE 2
+/**@}*/
+```
+
+#### 锁模式
+
+```cpp
+/**
+   @name Flags passed to lock functions
+
+   @{
+*/
+/** A flag passed to a locking callback when the lock was allocated as a
+ * read-write lock, and we want to acquire or release the lock for writing. */
+#define EVTHREAD_WRITE	0x04
+/** A flag passed to a locking callback when the lock was allocated as a
+ * read-write lock, and we want to acquire or release the lock for reading. */
+#define EVTHREAD_READ	0x08
+/** A flag passed to a locking callback when we don't want to block waiting
+ * for the lock; if we can't get the lock immediately, we will instead
+ * return nonzero from the locking callback. */
+#define EVTHREAD_TRY    0x10
+/**@}*/
+```
+
+#### 多平台支持
+
+Posix和Windows的支持分别有一个实现，具体见`evthread_pthread.c`,`evthread_win32.c`。
+
+以Posix pthreads为例
+
+```cpp
+int
+evthread_use_pthreads(void)
+{
+	struct evthread_lock_callbacks cbs = {
+		EVTHREAD_LOCK_API_VERSION,
+		EVTHREAD_LOCKTYPE_RECURSIVE,
+		evthread_posix_lock_alloc,
+		evthread_posix_lock_free,
+		evthread_posix_lock,
+		evthread_posix_unlock
+	};
+	struct evthread_condition_callbacks cond_cbs = {
+		EVTHREAD_CONDITION_API_VERSION,
+		evthread_posix_cond_alloc,
+		evthread_posix_cond_free,
+		evthread_posix_cond_signal,
+		evthread_posix_cond_wait
+	};
+	/* Set ourselves up to get recursive locks. */
+	if (pthread_mutexattr_init(&attr_recursive))
+		return -1;
+	if (pthread_mutexattr_settype(&attr_recursive, PTHREAD_MUTEX_RECURSIVE))
+		return -1;
+
+	evthread_set_lock_callbacks(&cbs);
+	evthread_set_condition_callbacks(&cond_cbs);
+	evthread_set_id_callback(evthread_posix_get_id);
+	return 0;
+}
+```
+
+#### 定制顺序
+
+内存分配、日志记录、线程锁。这些定制都应该放在代码的最前面，即不能在使用 Libevent 的 event 、 event_base 这些结构体之后。因为这些结构体会使用到内存分配、日志记录、线程锁的。而这三者的定制顺序应该是：内存分配 -> 日志记录 -> 线程锁。
+
+#### Debug支持
+
+```cpp
+/** Enable debugging wrappers around the current lock callbacks.  If Libevent
+ * makes one of several common locking errors, exit with an assertion failure.
+ *
+ * If you're going to call this function, you must do so before any locks are
+ * allocated.
+ **/
+EVENT2_EXPORT_SYMBOL
+void evthread_enable_lock_debugging(void);
+```
+
+### 容器
+
+`compat/sys/queue.h`
+
+This file defines five types of data structures: singly-linked lists, lists, simple queues, tail queues, and circular queues.
+
+#### tail queues
