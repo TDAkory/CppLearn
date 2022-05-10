@@ -4,6 +4,7 @@
 	- [参考资料](#参考资料)
 	- [源码分析笔记](#源码分析笔记)
 		- [跨平台配置生成](#跨平台配置生成)
+		- [通用类型支持](#通用类型支持)
 		- [日志支持](#日志支持)
 		- [内存处理](#内存处理)
 			- [注意事项](#注意事项)
@@ -65,6 +66,12 @@
 /* Define to 1 if you have the <errno.h> header file. */
 #define EVENT__HAVE_ERRNO_H 1
 ```
+
+### 通用类型支持
+
+Libevent定义了一系列的可移植的兼容类型和函数。这使得在各个系统上都有一致的效果，Libevent一般都会在兼容通用类型和函数的前面加上ev或evutil前缀。
+
+在实现上，Libevent都是使用条件编译+宏定义的方式。使用这种方式，同一个宏名字，可以使得在不同的系统上， 编译时得到不同的值。这种方式在跨平台编程中，经常使用到。此外，对于Libevent的兼容类型，如果所在系统已经有对应功能的类型，那么Libevent将直接将ev_XXX宏的值定义为该类型。如果所在系统没有对应的类型，那么就会选择一个比较合理的类型作为宏值。
 
 ### 日志支持
 
@@ -339,3 +346,129 @@ void evthread_enable_lock_debugging(void);
 This file defines five types of data structures: singly-linked lists, lists, simple queues, tail queues, and circular queues.
 
 #### tail queues
+
+*定义*
+
+```cpp
+/*
+ * Tail queue definitions.
+ */
+#define TAILQ_HEAD(name, type)						\
+struct name {								\
+	struct type *tqh_first;	/* first element */			\
+	struct type **tqh_last;	/* addr of last next element */		\
+}
+
+#define TAILQ_HEAD_INITIALIZER(head)					\
+	{ NULL, &(head).tqh_first }
+
+#define TAILQ_ENTRY(type)						\
+struct {								\
+	struct type *tqe_next;	/* next element */			\
+	struct type **tqe_prev;	/* address of previous next element */	\
+}
+```
+
+除了这两个结构体，在queue.h文件中，还以宏定义的形式为TAILQ_QUEUE定义了一系列的访问和操作函数。
+
+```cpp
+//队列中的元素结构体。它有一个值，并且有前向指针和后向指针
+//通过前后像指针，把队列中的节点(元素)连接起来
+struct queue_entry_t
+{
+    int value;
+ 
+    //从TAILQ_ENTRY的定义可知，它只能是结构体或者共用体的成员变量
+    TAILQ_ENTRY(queue_entry_t)entry;
+};
+ 
+//定义一个结构体，结构体名为queue_head_t，成员变量类型为queue_entry_t
+//就像有头节点的链表那样，这个是队列头。它有两个指针，分别指向队列的头和尾
+TAILQ_HEAD(queue_head_t, queue_entry_t);
+ 
+int main(int argc, char **argv)
+{
+    struct queue_head_t queue_head;
+    struct queue_entry_t *q, *p, *s, *new_item;
+    int i;
+ 
+    TAILQ_INIT(&queue_head);
+ 
+    for(i = 0; i < 3; ++i)
+    {
+        p = (struct queue_entry_t*)malloc(sizeof(struct queue_entry_t));
+        p->value = i;
+ 
+        //第三个参数entry的写法很怪，居然是一个成员变量名(field)
+        TAILQ_INSERT_TAIL(&queue_head, p, entry);//在队尾插入数据
+    }
+ 
+    q = (struct queue_entry_t*)malloc(sizeof(struct queue_entry_t));
+    q->value = 10;
+    TAILQ_INSERT_HEAD(&queue_head, q, entry);//在队头插入数据
+ 
+    //现在q指向队头元素、p指向队尾元素
+ 
+    s = (struct queue_entry_t*)malloc(sizeof(struct queue_entry_t));
+    s->value = 20;
+    //在队头元素q的后面插入元素
+    TAILQ_INSERT_AFTER(&queue_head, q, s, entry);
+ 
+ 
+    s = (struct queue_entry_t*)malloc(sizeof(struct queue_entry_t));
+    s->value = 30;
+    //在队尾元素p的前面插入元素
+    TAILQ_INSERT_BEFORE(p, s, entry);
+ 
+    //现在进行输出
+	//获取第一个元素
+    s = TAILQ_FIRST(&queue_head);
+    printf("the first entry is %d\n", s->value);
+	
+	//获取下一个元素
+    s = TAILQ_NEXT(s, entry);
+    printf("the second entry is %d\n\n", s->value);
+ 
+    //删除第二个元素, 但并没有释放s指向元素的内存
+    TAILQ_REMOVE(&queue_head, s, entry);
+    free(s);
+ 
+ 
+    new_item = (struct queue_entry_t*)malloc(sizeof(struct queue_entry_t));
+    new_item->value = 100;
+ 
+    s = TAILQ_FIRST(&queue_head);
+    //用new_iten替换第一个元素
+    TAILQ_REPLACE(&queue_head, s, new_item, entry);
+ 
+ 
+    printf("now, print again\n");
+    i = 0;
+    TAILQ_FOREACH(p, &queue_head, entry)//用foreach遍历所有元素
+    {
+        printf("the %dth entry is %d\n", i, p->value);
+    }
+ 
+    p = TAILQ_LAST(&queue_head, queue_head_t);
+    printf("last is %d\n", p->value);
+ 
+    p = TAILQ_PREV(p, queue_head_t, entry);
+    printf("the entry before last is %d\n", p->value);
+}
+```
+
+gcc -E展开后
+
+很精巧
+
+![TAILQ内存结构](https://raw.githubusercontent.com/TDAkory/ImageResources/main/img/20220505114222.png)
+
+```cpp
+//p = TAILQ_LAST(&queue_head, queue_head_t);
+p = (*(((struct queue_head_t *)((&queue_head)->tqh_last))->tqh_last));
+```
+
+```cpp
+//p = TAILQ_PREV(p, queue_head_t, entry);
+p = (*(((struct queue_head_t *)((p)->entry.tqe_prev))->tqh_last));
+```
