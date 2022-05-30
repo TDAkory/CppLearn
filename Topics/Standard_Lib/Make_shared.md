@@ -139,3 +139,17 @@ template<typename _Yp, typename _Yp2 = typename remove_cv<_Yp>::type>
 	    __base->_M_weak_assign(const_cast<_Yp2*>(__p), _M_refcount);
 	}
 ```
+
+### 4. std::shared_ptr的内存结构
+
+首先shared_ptr大概包含以下数据单元：指向data field的element_type *类型的指针，以及一个间接的包含了_M_use_count，_M_weak_count的__shared_count（在某些情况下它可能还包含一个deletor对象和一个allocator对象，这一区域被称为control block，__shared_count中包含一个指向这个control block的指针）。
+
+![std::shared_ptr的内存结构](https://raw.githubusercontent.com/TDAkory/ImageResources/main/img/20220530222709.png)
+
+在__shared_ptr里，会通过萃取技术为_Sp_counted_ptr_inplace开辟出一块内存，其中_Sp_counted_ptr_inplace唯一的数据成员是_Impl类型的_M_impl。下面来看_Sp_counted_ptr_inplace中直接以及间接包含的信息：
+
+* 由于_Sp_counted_ptr_inplace的父类是_Sp_counted_base，而_Sp_counted_base里有_M_use_count和_M_weak_count两个成员，因此_Sp_counted_ptr_inplace间接的包含了_M_use_count和_M_weak_count。
+* 由于_M_impl继承自 _Sp_ebo_helper<0, _Alloc>，而 _Sp_ebo_helper<0, _Alloc>是一个为了使用空基类优化（EBCO）而引入的辅助类，因此_Sp_counted_ptr_inplace还间接的包含了一个allocator对象。
+* 由于_M_impl还有一个__gnu_cxx::aligned_buffer<_Tp> _M_storage成员，而__gnu_cxx::aligned_buffer<_Tp>包含的是一个大小和经过内存对其后的_Tp的大小相同的char数组，其目的是用来存储_Tp，因此_Sp_counted_ptr_inplace还间接包含了一个_Tp。
+
+上述1和2对应于control block，3对应于data fiels。因此在//call stack #0中，通过类型萃取std::__allocate_guarded为_Sp_counted_ptr_inplace开辟内存，就等于同时为data field和control block开辟了内存。这也正是std::make_shared的精妙所在。
