@@ -195,3 +195,62 @@ int main() {
     S<char, char> e3;
 }
 ```
+
+对于特化声明而言，因为它不是模板声明，所以应该使用（位于类外部）的普通成员定义语法，来定义全局类模板特化的成员，不能指定template<>前缀。
+
+```cpp
+template<typename T>
+class S;
+
+template<> class S<char *> {
+    void print() const;
+};
+
+void S<char *>::print() const {
+    std::cout << "no template<> ahead" << std::endl;
+}
+```
+
+可以用全局模板特化来代替对应的泛型模板的某个实例化体。但两者不能共存在同一个程序中，会导致编译期错误。
+
+```cpp
+template<typename T>
+class Invalid {};
+
+Invalid<double> x1; // 产生一个实例化
+
+template<>
+class Invalid<double>;  // 错误：Invalid<double>已经被实例化了
+```
+
+上述错误如果发生在不同的编译单元，则错误很难被捕捉。
+
+### 全局函数模板特化
+
+从语法和原则上讲，全局函数模板特化和类模板特化基本是一致的。唯一的区别在于，函数模板特化引入了重载和实参演绎这两个概念。
+
+借助实参演绎的情况下，全局特化可以不声明显式的模板实参。
+
+```cpp
+template<typename T>
+int f(T) // (1)
+{
+return 1;
+}
+
+template<typename T>
+int f(T*) // (2)
+{
+return 2;
+}
+
+template<> int f(int) // OK: specialization of (1)
+{
+return 3;
+}
+
+template<> int f(int*) // OK: specialization of (2)
+{
+return 4;
+}
+```
