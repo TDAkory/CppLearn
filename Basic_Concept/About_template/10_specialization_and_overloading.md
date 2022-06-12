@@ -1,5 +1,18 @@
 # Specialization & Overloading
 
+- [Specialization & Overloading](#specialization--overloading)
+  - [When "Generic Code" Doesn't Quite Cut It](#when-generic-code-doesnt-quite-cut-it)
+    - [透明自定义](#透明自定义)
+  - [重载函数模板](#重载函数模板)
+    - [签名](#签名)
+    - [重载的函数模板的局部排序](#重载的函数模板的局部排序)
+    - [排序原则](#排序原则)
+  - [显式特化](#显式特化)
+    - [全局的类模板特化](#全局的类模板特化)
+    - [全局函数模板特化](#全局函数模板特化)
+    - [全局成员特化](#全局成员特化)
+  - [局部的类模板特化](#局部的类模板特化)
+
 ## When "Generic Code" Doesn't Quite Cut It
 
 ```cpp
@@ -235,22 +248,187 @@ class Invalid<double>;  // 错误：Invalid<double>已经被实例化了
 template<typename T>
 int f(T) // (1)
 {
-return 1;
+    return 1;
 }
 
 template<typename T>
 int f(T*) // (2)
 {
-return 2;
+    return 2;
 }
 
 template<> int f(int) // OK: specialization of (1)
 {
-return 3;
+    return 3;
 }
 
 template<> int f(int*) // OK: specialization of (2)
 {
-return 4;
+    return 4;
 }
+```
+
+全局函数模板特化不能包含缺省的实参值，但是，对于基本模板所指定的任何缺省实参，显式特化版本都可以应用这些缺省实参
+
+```cpp
+template<typename T>
+int f(T, T x = 42) {
+    return x;
+}
+
+template<> int f(int, int = 35) // ERROR!
+{
+    return 0;
+}
+
+template<typename T>
+int g(T, T x = 42)
+{
+    return x;
+}
+
+template<> int g(int, int y)
+{
+    return y/2;
+}
+
+int main()
+{
+std::cout << g(0) << std::endl; // should print 21
+}
+```
+
+### 全局成员特化
+
+除了成员模板外，类模板的成员函数和静态成员变量也可以被全局特化。
+
+```cpp
+template<typename T>
+class Outer { // (1)
+  public:
+    template<typename U>
+    class Inner { // (2)
+      private:
+        static int count; // (3)
+    };
+    static int code; // (4) 
+    void print() const { // (5)
+        std::cout << "generic";
+    }
+};
+
+template<typename T>
+int Outer<T>::code = 6; // (6)
+
+template<typename T> template<typename U>
+int Outer<T>::Inner<U>::count = 7; // (7)
+
+template<>
+class Outer<bool> { // (8)
+  public:
+    template<typename U>
+    class Inner { // (9)
+      private:
+        static int count; // (10)
+    };
+    void print() const { // (11)
+    }
+};
+
+// 这些定义替代Outer<void>中的定义，类Outer<void>的其他定义默认产生自1处的模板，此外，提供上述声明之后，不能在提供Outer<void>的显式特化
+template<>
+int Outer<void>::code = 12; // 4的特化
+
+template<>
+void Outer<void>::print() const {   // 5的特化
+    std::cout << "Outer<void>"; 
+}
+
+// 特化成员模板Outer<T>::Inner
+template<>
+    template<typename X>
+    class Outer<wchar_t>::Inner {
+      public:
+        static long count;  // 成员类型发生了改变  
+    }；
+
+template<>
+    template<typename X>
+    long Outer<wchar_t>::Inner<X>::count;
+
+// 模板Outer<T>::Inner全局特化
+template<>
+    template<>
+    class Outer<char>::Inner<wchar_t> {
+      public:
+        enum { count = 1};
+    };
+
+// 下面的方式是不合法的，template<>不能位于模板实参列表的后面
+template<typename X>
+template<> class Outer<X>::Inner<void>; // ERROR
+
+// 若外围模板类已经完成了全局特化，Outer<bool>，则它的成员模板也就不存在外围模板了，只需要一个template<>
+template<>
+class Outer<bool>::Inner<wchar_t> {
+  public:
+    enum { count = 2};
+};
+```
+
+## 局部的类模板特化
+
+有时候希望把类模板特化成一个”针对模板实参“的类家族，而不是针对”一个具体实参列表“的全局特化
+
+```cpp
+template<typename T>
+class List {
+    void append(T const &);
+    inline size_t length() const;
+};
+
+template<>
+class List<void *> {
+    ...
+};
+
+template<typename T>
+class List<T *> {
+  private:
+    // 这里存在的问题是，List<void *>会递归地包含一个相同类型的List<void *>的成员，为了打破递归，可以在局部特化前面先提供一个全局特化
+    List<void *> impl;
+  public:
+    void append(T *p) {
+        impl.append(p);
+    }
+
+    size_t length() const {
+        return impl.length();
+    }
+}；
+```
+
+* 注意：进行匹配时，全局特化优于局部特化。
+
+局部特化声明的参数列表和实参列表，存在如下约束：
+1. 局部特化的实参必须和基本模板的响应实参在种类上（类型、非类型、模板）是匹配的
+2. 局部特化的参数列表不能有缺省实参，但局部特化可以使用基本类模板的缺省实参
+3. 局部特化的非类型实参只能是非类型值，或者是普通的非类型模板参数，而不能是更复杂的依赖型表达式
+4. 局部特化的模板实参列表不能和基本模板的参数列表完全等同
+
+```cpp
+template<typename T, int I = 3>
+class S; // primary template
+
+template<typename T>
+class S<int, T>; // ERROR: parameter kind mismatch
+
+template<typename T = int>
+class S<T, 10>; // ERROR: no default arguments
+
+template<int I>
+class S<int, I*2>; // ERROR: no nontype expressions
+
+template<typename U, int K>
+class S<U, K>; // ERROR: no significant difference from primary template
 ```
