@@ -95,3 +95,29 @@ int main()
  …
 }
 ```
+
+## typedef模板
+
+```cpp
+template<typename T>
+typedef vector<List<T>> Tables;
+
+Tables<int> t;
+```
+
+## 函数模板的局部特化
+
+* 在不改变类定义的前提下，我们可以特化勒种的某个成员模板。然而，如果要给类增加一个重载函数，我们就不得不改变这个类的定义
+* 为了重载函数模板，多个重载函数之间的参数必须由本质上的区别
+* 哪些针对某个非重载函数的合法代码，在对这个函数进行重载之后，就可能会变成不合法的代码。
+* 针对引用“特定函数模板或者特定函数模板的实例化实体”的友元声明，函数模板的重载版本并不能自动获得原始版本的特权
+
+```cpp
+template<typename T>
+T const& max(T const&, T const&);   // primary template
+
+template<typename T>
+T* const& max(T* const&, T* const&);    // partial specialization
+```
+
+## typeof运算符
