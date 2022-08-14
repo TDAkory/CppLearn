@@ -121,3 +121,19 @@ T* const& max(T* const&, T* const&);    // partial specialization
 ```
 
 ## typeof运算符
+
+## 命名模板实参
+
+## 静态属性
+
+## 客户端实例化信息
+
+## 重载类模板
+
+## List参数
+
+## 布局控制
+
+## 初始化器的演绎
+
+## 函数表达式
