@@ -181,3 +181,108 @@ class AccumulationTraits<char> {
 ```
 
 ### Parameterized Tratis 参数化Traits
+
+参数化trait主要的目的在于：添加一个具有缺省值的模板参数，而且改缺省值由前面介绍的trait模板决定。
+
+```cpp
+// traits/accum5.hpp 
+#ifndef ACCUM_HPP 
+#define ACCUM_HPP 
+
+#include "accumtraits4.hpp" 
+
+template <typename T, typename AT = AccumulationTraits<T>> 
+class Accum { 
+  public: 
+    static typename AT::AccT accum (T const* beg, T const* end) { 
+        typename AT::AccT total = AT::zero(); 
+        while (beg != end) { 
+            total += *beg; 
+            ++beg; 
+            }
+        return total; 
+    }
+};
+
+template <typename T> 
+inline 
+typename AccumulationTraits<T>::AccT accum (T const* beg, T const* end) { 
+    return Accum<T>::accum(beg, end); 
+}
+
+template <typename Traits, typename T> 
+inline 
+typename Traits::AccT accum (T const* beg, T const* end) { 
+    return Accum<T, Traits>::accum(beg, end); 
+}
+#endif // ACCUM_HPP
+```
+
+### `policy`和`policy`类
+
+除了数值的求和，求和语义还能应用在其他场景，比如对序列中给定的值求和，对字符串进行凭借，甚至于在序列中找到一个最大值。这些情况中，针对`accum`的操作，唯一需要改变的就是`total+=*beg`这一句，于是，我们把这个操作称为该累加过程的一个`policy`。因此，一个`policy`类就是一个提供了一个接口的类，该接口能够在算法中应用一个或多个`policy`。
+
+```cpp
+// traits/accum6.hpp 
+#ifndef ACCUM_HPP 
+#define ACCUM_HPP 
+
+#include "accumtraits4.hpp" 
+#include "sumpolicy1.hpp" 
+
+template <typename T, typename Policy = SumPolicy, typename Traits = AccumulationTraits<T> > class Accum { 
+  public: 
+    typedef typename Traits::AccT AccT; 
+    static AccT accum (T const* beg, T const* end) { 
+        AccT total = Traits::zero(); 
+        while (beg != end) { 
+            Policy::accumulate(total, *beg); 
+            ++beg; }
+        return total; 
+    } 
+};
+#endif // ACCUM_HPP
+```
+
+```cpp
+// traits/sumpolicy1.hpp 
+#ifndef SUMPOLICY_HPP 
+#define SUMPOLICY_HPP 
+
+class SumPolicy { 
+  public: 
+    template<typename T1, typename T2> 
+    static void accumulate (T1& total, T2 const & value) { 
+        total += value; 
+    }
+};
+#endif // SUMPOLICY_HPP
+```
+
+考虑如下程序，试图计算几个值的乘积
+
+```cpp
+// traits/accum7.cpp 
+#include "accum6.hpp" 
+#include <iostream> 
+
+class MultPolicy { 
+  public:
+    template<typename T1, typename T2> 
+    static void accumulate (T1& total, T2 const& value) { 
+        total *= value; 
+    } 
+};
+
+int main() { 
+    // create array of 5 integer values 
+    int num[]={1,2,3,4,5}; // print product of all values 
+    std::cout << "the product of the integer values is " 
+              << Accum<int,MultPolicy>::accum(&num[0], &num[5]) 
+              << '\n'; 
+}
+
+// the product of the integer values is 0
+```
+
+问题在于，对于乘法，0不是一个合理的初值。这提醒我们：**不同的trait和不同的policy应该是互相交互的，我们应该更加细心的进行模板设计。**
