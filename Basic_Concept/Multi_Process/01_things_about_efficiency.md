@@ -1,0 +1,2 @@
+- [Does lock xchg have the same behavior as mfence?](https://stackoverflow.com/questions/40409297/does-lock-xchg-have-the-same-behavior-as-mfence)
+- 
