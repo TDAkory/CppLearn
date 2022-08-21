@@ -1,5 +1,17 @@
 # Trait and  Policy
 
+- [Trait and  Policy](#trait-and--policy)
+  - [例子：累加一个序列](#例子累加一个序列)
+    - [Fixed traits](#fixed-traits)
+    - [Value Traits](#value-traits)
+    - [Parameterized Tratis 参数化Traits](#parameterized-tratis-参数化traits)
+    - [`policy`和`policy`类](#policy和policy类)
+    - [`trait` 和 `policy` 的区别](#trait-和-policy-的区别)
+    - [成员模板和模板的模板参数](#成员模板和模板的模板参数)
+    - [运用普通的迭代器进行累积](#运用普通的迭代器进行累积)
+  - [类型函数](#类型函数)
+    - [确定元素的类型](#确定元素的类型)
+
 ## 例子：累加一个序列
 
 ### Fixed traits
@@ -286,3 +298,134 @@ int main() {
 ```
 
 问题在于，对于乘法，0不是一个合理的初值。这提醒我们：**不同的trait和不同的policy应该是互相交互的，我们应该更加细心的进行模板设计。**
+
+### `trait` 和 `policy` 的区别
+
+* `trait`：用来刻画一个事物的特性
+* `policy`：为了某种有益或有利的目的而采用的一系列动作
+
+### 成员模板和模板的模板参数
+
+可以把SumPolicy改写成一个模板：
+
+```cpp
+// traits/sumpolicy2.hpp 
+#ifndef SUMPOLICY_HPP 
+#define SUMPOLICY_HPP 
+
+template <typename T1, typename T2> 
+class SumPolicy { 
+ public: 
+    static void accumulate (T1& total, T2 const & value) { 
+        total += value; 
+    }
+};
+#endif // SUMPOLICY_HPP
+```
+
+```cpp
+// traits/accum8.hpp 
+#ifndef ACCUM_HPP 
+#define ACCUM_HPP 
+
+#include "accumtraits4.hpp" 
+#include "sumpolicy2.hpp" 
+
+template <typename T, 
+          template<typename,typename> class Policy = SumPolicy, 
+          typename Traits = AccumulationTraits<T> > 
+class Accum { 
+  public: 
+    typedef typename Traits::AccT AccT; 
+    static AccT accum (T const* beg, T const* end) { 
+        AccT total = Traits::zero();
+        while (beg != end) { 
+            Policy<AccT,T>::accumulate(total, *beg);
+            ++beg; 
+            }
+        return total; 
+    } 
+};
+#endif // ACCUM_HPP
+```
+
+通过模板的模板参数访问policy class的优点在于：借助于某个依赖于模板参数的类型，可以很容易地让policy class携带一些状态信息。
+缺点在于：policy必须被实现为模板，且在接口中还定义了模板参数的确切个数，对扩展不是很友好。
+
+如果使用成员模板的方式，可以做到如下扩展：
+
+```cpp
+// traits/sumpolicy3.hpp
+#ifndef SUMPOLICY_HPP 
+#define SUMPOLICY_HPP 
+template<bool use_compound_op = true> 
+class SumPolicy { 
+  public:
+    template<typename T1, typename T2> 
+    static void accumulate (T1& total, T2 const & value) { 
+        total += value; 
+    } 
+};
+
+template<> class SumPolicy<false> { 
+  public:
+    template<typename T1, typename T2> 
+    static void accumulate (T1& total, T2 const & value) { 
+        total = total + value;
+    } 
+};
+#endif // SUMPOLICY_HPP
+```
+
+### 运用普通的迭代器进行累积
+
+## 类型函数
+
+* 值函数：参数和返回结果都是值
+* 类型函数：接收某些类型实参，并且生成一个类型作为函数的返回结果。比如`sizeof`
+
+类模板也可以作为类型函数。类型函数的参数可以是模板参数，结果是抽取出来的成员类型或成员常量。比如，将sizeof运算符改变成如下接口：
+
+```cpp
+// traits/sizeof.cpp 
+#include <stddef.h> 
+#include <iostream> 
+
+template <typename T> 
+class TypeSize { 
+    public: static size_t const value = sizeof(T); 
+};
+
+int main() { 
+    std::cout << "TypeSize<int>::value = " << 
+              TypeSize<int>::value 
+              << std::endl; 
+}
+```
+
+### 确定元素的类型
+
+```cpp
+// traits/elementtype.cpp #include <vector>
+#include <list> 
+#include <stack> 
+#include <iostream> 
+#include <typeinfo> 
+
+template <typename T> 
+class ElementT; // primary template 
+
+template <typename T> 
+class ElementT<std::vector<T> > { // partial specialization
+ public: typedef T Type; 
+};
+```
+
+局部特化可以达到目的，但是太复杂。大多数情况下，类型函数和可应用类型（即容器中的类型）一起实现的，例如借助容器类型定义的成员类型value_type
+
+```cpp
+template <typename C> 
+class ElementT { 
+    public: typedef typename C::value_type Type; 
+};
+```
