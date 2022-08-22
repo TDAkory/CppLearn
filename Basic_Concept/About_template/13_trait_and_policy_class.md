@@ -11,6 +11,8 @@
     - [运用普通的迭代器进行累积](#运用普通的迭代器进行累积)
   - [类型函数](#类型函数)
     - [确定元素的类型](#确定元素的类型)
+    - [确定class类型](#确定class类型)
+    - [引用和限定符](#引用和限定符)
 
 ## 例子：累加一个序列
 
@@ -429,3 +431,25 @@ class ElementT {
     public: typedef typename C::value_type Type; 
 };
 ```
+
+### 确定class类型
+
+```cpp
+// traits/isclasst.hpp 
+template<typename T> 
+class IsClassT { 
+  private: 
+    typedef char One; 
+    typedef struct { char a[2]; } Two; 
+    template<typename C> static One test(int C::*); 
+    template<typename C> static Two test(…);
+
+  public: 
+    enum { Yes = sizeof(IsClassT<T>::test<T>(0)) == 1 }; 
+    enum { No = !Yes }; 
+};
+```
+
+使用上面类型函数，可以确定某个类型是否为class类型。其应用了SFINAE原则（substitution-failure-is-not-an-error）。只有当C是一个class类型的时候，身为成员指针的类型构造`C::*`才会是有效的。
+
+### 引用和限定符
