@@ -69,3 +69,5 @@
 
 ### Print
 
+* `x/s $str` 打印ASCII字符串
+  * `x/ws $str` 打印宽字符串
