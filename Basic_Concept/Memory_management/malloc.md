@@ -1,5 +1,7 @@
 # malloc
 
+> [malloc和free的实现原理解析](https://jacktang816.github.io/post/mallocandfree/)
+
 ## 粗略的描述分配流程
 
 1. 如果分配内存<512字节，则通过内存大小定位到smallbins对应的index上(floor(size/8))
