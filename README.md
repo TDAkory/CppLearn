@@ -13,6 +13,20 @@ description: c++ world
 - [copybara,A tool for transforming and moving code between repositories.](https://github.com/google/copybara)
 - [Devirtualization in LLVM and Clang](https://blog.llvm.org/2017/03/devirtualization-in-llvm-and-clang.html)
 
+# Blog & BroadCast
+
+- [Fluent C++](https://www.fluentcpp.com/)
+- [Arthur O’Dwyer](https://quuxplusone.github.io/blog/)
+- [Sutter’s Mill](https://herbsutter.com/)
+- [Modernes C++](https://www.modernescpp.com/)
+- [The Pasture](https://thephd.dev/)
+- [foonathan::​blog()](https://www.foonathan.net/)
+- [Barry Revzin](https://brevzin.github.io/)
+- [artificial::mind](https://artificial-mind.net/)
+- [Bartek's coding blog](https://www.cppstories.com/)
+- [Simplify C++](https://arne-mertz.de/)
+- [Video Cortex](http://videocortex.io/)
+- [Shafik Yaghmour](https://shafik.github.io/)
 
 ## Reading Materials
 
