@@ -11,3 +11,4 @@
 
 - [glibc内存管理那些事](https://www.jianshu.com/p/2fedeacfa797)
 - [2万字|30张图带你领略glibc内存管理精髓](https://mp.weixin.qq.com/s/nEVkvxsiS3q26JhtDGMwfg)
+- [How to replace malloc](https://www.gnu.org/software/libc/manual/html_node/Replacing-malloc.html)
