@@ -2,6 +2,17 @@
 description: c++ world
 ---
 
+# Official Info
+
+- [The Linux Kernel Archives](https://www.kernel.org/)
+- [Read Source Online](https://elixir.bootlin.com/linux/latest/source)
+- [Standard C++](https://isocpp.org/)
+- [标准委员会的文档列表](https://open-std.org/JTC1/SC22/WG21/docs/papers/)
+- [The C++ Standards Committee - ISOCPP](https://open-std.org/JTC1/SC22/WG21/)
+- [“LIBC++” C++ STANDARD LIBRARY](https://libcxx.llvm.org/)
+- [GCC, the GNU Compiler Collection](https://gcc.gnu.org/)
+- [Apache C++ Standard Library](https://stdcxx.apache.org/)
+
 # Book Lists
 
 - [学习路线参考一](https://leetcode-cn.com/circle/discuss/KyGwCS/)
