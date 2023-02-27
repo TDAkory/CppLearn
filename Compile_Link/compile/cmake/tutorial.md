@@ -28,3 +28,17 @@ To add a library in CMake, use the `add_library()` command and specify which sou
 Rather than placing all of the source files in one directory, we can organize our project with one or more subdirectories. In this case, we will create a subdirectory specifically for our library. Here, we can add a new CMakeLists.txt file and one or more source files. In the top level CMakeLists.txt file, we will use the add_subdirectory() command to add the subdirectory to the build.
 
 Once the library is created, it is connected to our executable target with target_include_directories() and target_link_libraries().
+
+## Adding Usage Requirements for a Library
+
+### Adding Usage Requirements for a Library
+
+Usage requirements of a target parameters allow for far better control over a library or executable's link and include line while also giving more control over the transitive property of targets inside CMake. The primary commands that leverage usage requirements are:
+
+* target_compile_definitions()
+* target_compile_options()
+* target_include_directories()
+* target_link_directories()
+* target_link_options()
+* target_precompile_headers()
+* target_sources()

@@ -1,8 +1,26 @@
 # commands and parameters of CMake
 
+- [commands and parameters of CMake](#commands-and-parameters-of-cmake)
+  - [`PROJECT_SOURCE_DIR`](#project_source_dir)
+  - [`CMAKE_CURRENT_SOURCE_DIR`](#cmake_current_source_dir)
+  - [`PUBLIC` `PRIVATE` `INTERFACE`](#public-private-interface)
+  - [`add_library`](#add_library)
+  - [`option()`](#option)
+
+
 ## `PROJECT_SOURCE_DIR`
 
 This is the source directory of the last call to the `project()` command made in the current directory scope or one of its parents. Note, it is not affected by calls to `project()` made within a child directory scope (i.e. from within a call to `add_subdirectory()` from the current scope).
+
+## `CMAKE_CURRENT_SOURCE_DIR`
+
+The path to the source directory currently being processed.
+This is the full path to the source directory that is currently being processed by cmake.
+When run in cmake -P script mode, CMake sets the variables CMAKE_BINARY_DIR, CMAKE_SOURCE_DIR, CMAKE_CURRENT_BINARY_DIR and CMAKE_CURRENT_SOURCE_DIR to the current working directory.
+
+## `PUBLIC` `PRIVATE` `INTERFACE`
+
+- [CMAKE 里PRIVATE、PUBLIC、INTERFACE属性示例详解](https://blog.csdn.net/weixin_43862847/article/details/119762230)
 
 ## `add_library`
 
