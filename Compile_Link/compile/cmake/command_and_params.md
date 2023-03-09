@@ -6,6 +6,8 @@
   - [`PUBLIC` `PRIVATE` `INTERFACE`](#public-private-interface)
   - [`add_library`](#add_library)
   - [`option()`](#option)
+  - [`install()`](#install)
+  - [`CheckCXXSourceCompiles`](#checkcxxsourcecompiles)
 
 
 ## `PROJECT_SOURCE_DIR`
@@ -39,3 +41,10 @@ option(<variable> "<help_text>" [value])
 ```
 
 If no initial <value> is provided, boolean OFF is the default value. If <variable> is already set as a normal or cache variable, then the command does nothing
+
+## [`install()`](https://cmake.org/cmake/help/latest/command/install.html#command:install)
+
+## [`CheckCXXSourceCompiles`](https://cmake.org/cmake/help/latest/module/CheckCXXSourceCompiles.html#module:CheckCXXSourceCompiles)
+
+Check if given C++ source compiles and links into an executable.
+

@@ -10,7 +10,7 @@
 
 ## 标识符
 
-### cmake_minimum_required
+### `cmake_minimum_required`
 
 ```c
 cmake_minimum_required(VERSION 3.5 FATAL_ERROR)

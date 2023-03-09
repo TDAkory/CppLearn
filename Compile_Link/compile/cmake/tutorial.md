@@ -1,5 +1,21 @@
 # [Cmake Tutorial](https://cmake.org/cmake/help/latest/guide/tutorial/index.html)
 
+- [Cmake Tutorial](#cmake-tutorial)
+  - [A Basic Starting Point](#a-basic-starting-point)
+    - [Building a Basic Project](#building-a-basic-project)
+    - [Specifying the C++ Standard](#specifying-the-c-standard)
+    - [Adding a Version Number and Configured Header File](#adding-a-version-number-and-configured-header-file)
+  - [Adding a Library](#adding-a-library)
+  - [Adding Usage Requirements for a Library](#adding-usage-requirements-for-a-library)
+    - [Adding Usage Requirements for a Library](#adding-usage-requirements-for-a-library-1)
+  - [Adding Generator Expressions](#adding-generator-expressions)
+    - [Setting the C++ Standard with Interface Libraries](#setting-the-c-standard-with-interface-libraries)
+    - [Adding Compiler Warning Flags with Generator Expressions](#adding-compiler-warning-flags-with-generator-expressions)
+  - [Installing and Testing](#installing-and-testing)
+  - [Adding Support for a Testing Dashboard](#adding-support-for-a-testing-dashboard)
+  - [Adding System Introspection](#adding-system-introspection)
+
+
 ## A Basic Starting Point
 
 ### Building a Basic Project
@@ -42,3 +58,90 @@ Usage requirements of a target parameters allow for far better control over a li
 * target_link_options()
 * target_precompile_headers()
 * target_sources()
+
+## Adding Generator Expressions
+
+### Setting the C++ Standard with Interface Libraries
+
+Add an INTERFACE library target to specify the required C++ standard.
+
+create an interface library, tutorial_compiler_flags.
+
+use `target_compile_features()` to add the compiler feature cxx_std_11.
+
+```shell
+add_library(tutorial_compiler_flags INTERFACE)
+target_compile_features(tutorial_compiler_flags INTERFACE cxx_std_11)
+
+target_link_libraries(Tutorial PUBLIC ${EXTRA_LIBS} tutorial_compiler_flags)
+```
+
+### Adding Compiler Warning Flags with Generator Expressions
+
+A common usage of `generator expressions` is to conditionally add compiler flags, such as those for language levels or warnings. A nice pattern is to associate this information to an INTERFACE target allowing this information to propagate.
+
+determine which compiler our system is currently using to build since warning flags vary based on the compiler we use. This is done with the COMPILE_LANG_AND_ID generator expression. We set the result in the variables gcc_like_cxx and msvc_cxx as follows:
+
+```shell
+set(gcc_like_cxx "$<COMPILE_LANG_AND_ID:CXX,ARMClang,AppleClang,Clang,GNU,LCC>")
+set(msvc_cxx "$<COMPILE_LANG_AND_ID:CXX,MSVC>")
+```
+
+We use target_compile_options() to apply these flags to our interface library. we only want these warning flags to be used during builds. Consumers of our installed project should not inherit our warning flags. To specify this, we wrap our flags in a generator expression using the `BUILD_INTERFACE` condition.
+
+```shell
+target_compile_options(tutorial_compiler_flags INTERFACE
+  "$<${gcc_like_cxx}:$<BUILD_INTERFACE:-Wall;-Wextra;-Wshadow;-Wformat=2;-Wunused>>"
+  "$<${msvc_cxx}:$<BUILD_INTERFACE:-W3>>"
+)
+```
+
+## Installing and Testing
+
+normally we have bin for executable, include for header files, and lib for libraries.
+
+```shell
+set(installable_libs MathFunctions tutorial_compiler_flags)
+install(TARGETS ${installable_libs} DESTINATION lib)
+
+install(FILES MathFunctions.h DESTINATION include)
+
+install(TARGETS Tutorial DESTINATION bin)
+install(FILES "${PROJECT_BINARY_DIR}/TutorialConfig.h"
+  DESTINATION include
+  )
+```
+
+CTest offers a way to easily manage tests for your project. Tests can be added through the `add_test()` command. Although it is not explicitly covered in this tutorial, there is a lot of compatibility between CTest and other testing frameworks such as GoogleTest.
+
+## [Adding Support for a Testing Dashboard](https://cmake.org/cmake/help/latest/guide/tutorial/Adding%20Support%20for%20a%20Testing%20Dashboard.html)
+
+> Not that important
+
+## Adding System Introspection
+
+1. Include the CheckCXXSourceCompiles module.
+2. use check_cxx_source_compiles to determine whether log and exp are available from cmath.
+
+```shell
+include(CheckCXXSourceCompiles)
+
+check_cxx_source_compiles("
+  #include <cmath>
+  int main() {
+    std::log(1.0);
+    return 0;
+  }
+" HAVE_LOG)
+check_cxx_source_compiles("
+  #include <cmath>
+  int main() {
+    std::exp(1.0);
+    return 0;
+  }
+" HAVE_EXP)
+
+if (HAVE_LOG AND HAVE_EXP)
+    target_compile_definitions(MathFunctions PRIVATE "HAVE_LOG" "HAVE_EXP")
+endif()
+```
