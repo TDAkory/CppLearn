@@ -56,3 +56,15 @@ In an expression containing the .* operator, the first operand must be of the cl
 
 In an expression containing the ->* operator, the first operand must be of the type "pointer to the class type" of the type specified in the second operand, or it must be of a type unambiguously derived from that class.
 
+## 3. [C++异常-智能指针](https://mysteriouspreserve.com/blog/2022/04/08/Cpp-Exception-Smart-Pointer/)
+
+智能指针可以保证最基本的异常安全，但是错误的使用仍会出问题。
+
+下面的函数调用表达式，由于C++没有规定在函数调用表达式中，以何种顺序计算调用过程中需要用到的值，所以`new X`和`new Y`可能同时发生构造，`unique_ptr`无法起到保护作用。
+
+```cpp
+// Bad
+foo(std::unique_ptr<X>(new X), std::unique_ptr<Y>(new Y));
+// Good
+foo(std::make_unique<X>(), std::make_unique<Y>());
+```
