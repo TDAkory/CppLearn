@@ -15,7 +15,6 @@ A fused multiply–add is a floating-point multiply–add operation performed in
 
 ### [rdynamic](https://stackoverflow.com/questions/36692315/what-exactly-does-rdynamic-do-and-when-exactly-is-it-needed)
 
-
 `-rdynamic` exports the symbols of an executable, this mainly addresses scenarios as described in Mike Kinghan's answer, but also it helps e.g. Glibc's backtrace_symbols() symbolizing the backtrace.
 
 `-rdynamic` Pass the flag ‘-export-dynamic’ to the ELF linker, on targets that support it. This instructs the linker to add all symbols, not only used ones, to the dynamic symbol table. This option is needed for some uses of dlopen or to allow obtaining backtraces from within a program.
