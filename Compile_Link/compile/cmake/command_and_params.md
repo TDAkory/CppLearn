@@ -8,6 +8,7 @@
   - [`option()`](#option)
   - [`install()`](#install)
   - [`CheckCXXSourceCompiles`](#checkcxxsourcecompiles)
+  - [`find_package()`](#find_package)
 
 
 ## `PROJECT_SOURCE_DIR`
@@ -47,4 +48,6 @@ If no initial <value> is provided, boolean OFF is the default value. If <variabl
 ## [`CheckCXXSourceCompiles`](https://cmake.org/cmake/help/latest/module/CheckCXXSourceCompiles.html#module:CheckCXXSourceCompiles)
 
 Check if given C++ source compiles and links into an executable.
+
+## [`find_package()`](https://cmake.org/cmake/help/latest/command/find_package.html)
 
