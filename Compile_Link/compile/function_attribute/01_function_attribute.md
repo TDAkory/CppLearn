@@ -48,3 +48,21 @@ The always_inline function attribute instructs the compiler to inline a function
 ## weak variable attribute
 
 The weak variable attribute causes the symbol resulting from the variable declaration to appear in the object file as a weak symbol, rather than a global one. The language feature provides the programmer writing library functions with a way to allow variable definitions in user code to override the library declaration without causing duplicate name errors.
+
+## section
+
+The section function attribute specifies the section in the object file in which the compiler should place its generated code. The language feature provides the ability to control the section in which a function should appear.
+
+```c
+__attribute__ ((__section__("section-name")))
+```
+
+The section_name specifies a named section as a string literal, maximum length of 16 characters, not counting spaces. Spaces in the string are ignored.
+
+The section variable attribute can be applied to a declaration or definition of the following types of variables:
+
+- initialized or static global or namespace variables
+- static local variables
+- C++ only uninitialized global or namespace variables
+- C++ only static structure or class member variables
+
