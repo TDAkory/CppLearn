@@ -53,3 +53,31 @@ Code clarity and performance. You don’t need to write error handlers for error
 * Look for structured data (objects of classes with invariants) being converted into strings
 
 ## P.8: Don’t leak any resources
+
+* prefer RAII
+* Look at pointers: Classify them into non-owners (the default) and owners. Where feasible, replace owners with standard-library resource handles (as in the example above). Alternatively, mark an owner as such using owner from the GSL.
+* Look for naked new and delete
+* Look for known resource allocating functions returning raw pointers (such as fopen, malloc, and strdup)
+
+## P.9: Don’t waste time or space
+
+Many more specific rules aim at the overall goals of simplicity and elimination of gratuitous waste.
+
+## P.10: Prefer immutable data to mutable data
+
+better optimization, and you can't have a data race on a constant.
+
+* Look for “messy code” such as complex pointer manipulation and casting outside the implementation of abstractions.
+
+## P.12: Use supporting tools as appropriate
+
+* Static analysis tools
+* Concurrency tools
+* Testing tools
+
+Be careful not to become dependent on over-elaborate or over-specialized tool chains. Those can make your otherwise portable code non-portable.
+
+## P.13: Use support libraries as appropriate
+
+* The ISO C++ Standard Library
+* The Guidelines Support Library
