@@ -11,6 +11,7 @@
   * [04_some_template_skill](Basic_Concept/About_template/04_some_template_skill.md)
   * [05_template_on_hand](Basic_Concept/About_template/05_template_on_hand.md)
   * [06_template_go_deep](Basic_Concept/About_template/06_template_go_deep.md)
+  * [07_name_in_template](Basic_Concept/About_template/07_name_in_template.md)
 * [Basic_concepts](Basic_Concept/Basic_concepts/README.md)
   * [Trival,standard-layout,POD,literal-types](Basic_Concept/Basic_concepts/Trival,standard-layout,POD,literal-types.md)
 * [C++20](Basic_Concept/C++20/features.md)

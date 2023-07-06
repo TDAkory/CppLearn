@@ -152,4 +152,4 @@ template<typename _Yp, typename _Yp2 = typename remove_cv<_Yp>::type>
 * 由于_M_impl继承自 _Sp_ebo_helper<0, _Alloc>，而 _Sp_ebo_helper<0, _Alloc>是一个为了使用空基类优化（EBCO）而引入的辅助类，因此_Sp_counted_ptr_inplace还间接的包含了一个allocator对象。
 * 由于_M_impl还有一个__gnu_cxx::aligned_buffer<_Tp> _M_storage成员，而__gnu_cxx::aligned_buffer<_Tp>包含的是一个大小和经过内存对其后的_Tp的大小相同的char数组，其目的是用来存储_Tp，因此_Sp_counted_ptr_inplace还间接包含了一个_Tp。
 
-上述1和2对应于control block，3对应于data fiels。因此在//call stack #0中，通过类型萃取std::__allocate_guarded为_Sp_counted_ptr_inplace开辟内存，就等于同时为data field和control block开辟了内存。这也正是std::make_shared的精妙所在。
+上述1和2对应于control block，3对应于data fiels。因此在//call stack 0中，通过类型萃取std::__allocate_guarded为_Sp_counted_ptr_inplace开辟内存，就等于同时为data field和control block开辟了内存。这也正是std::make_shared的精妙所在。
