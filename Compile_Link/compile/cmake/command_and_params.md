@@ -51,3 +51,4 @@ Check if given C++ source compiles and links into an executable.
 
 ## [`find_package()`](https://cmake.org/cmake/help/latest/command/find_package.html)
 
+- [深入理解find_package用法](https://zhuanlan.zhihu.com/p/97369704)
