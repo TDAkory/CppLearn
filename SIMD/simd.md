@@ -17,3 +17,8 @@ Intel's AVX-512 SIMD instructions process 512 bits of data at once.
 
 ## SMID on C++
 
+## ReadList
+
+- [intel Intrinsics Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#ig_expand=3730,5200,1884,4635,466&techs=SSE_ALL,AVX_ALL,AVX_512)
+
+- [SIMDized check which bytes are in a set](http://0x80.pl/articles/simd-byte-lookup.html)
