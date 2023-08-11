@@ -72,7 +72,7 @@ char* EncodeVarint64(char* dst, uint64_t v) {
 }
 ```
 
-解码
+解码，依次读取1byte，直到最高位为0的byte结束，取低7bit，作(<<7)移位操作组合成Int。
 
 ```cpp
 inline const char* GetVarint32Ptr(const char* p, const char* limit,
