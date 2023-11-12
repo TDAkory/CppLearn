@@ -24,8 +24,9 @@
 编译器首先做的就是为等待值（awaited value）生成包含`Awaiter`对象的代码。
 
 假设：
-* the promise object for the awaiting coroutine has type, P
-*  that promise is an l-value reference to the promise object for the current coroutine.
+
+* the promise object for the awaiting coroutine has type P
+* that promise is an l-value reference to the promise object for the current coroutine.
 
 用伪代码表述如下：
 
