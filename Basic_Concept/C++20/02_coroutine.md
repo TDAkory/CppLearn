@@ -14,6 +14,12 @@
     - [Avoiding memory allocations](#avoiding-memory-allocations)
     - [Example](#example)
   - [`Promise` Interface](#promise-interface)
+    - [分配协程帧](#分配协程帧)
+      - [Customising coroutine frame memory allocaiton](#customising-coroutine-frame-memory-allocaiton)
+    - [拷贝参数到协程帧](#拷贝参数到协程帧)
+    - [Constructing the promise object](#constructing-the-promise-object)
+    - [Obtaining the return object](#obtaining-the-return-object)
+    - [The initial-suspend point](#the-initial-suspend-point)
 
 
 ## Refs
@@ -22,6 +28,7 @@
 - [C++ Coroutines: Understanding operator co_await](https://lewissbaker.github.io/2017/11/17/understanding-operator-co-await)
 
 - [Coroutines](https://en.cppreference.com/w/cpp/language/coroutines)
+- [Coroutines and Reference Parameters](https://toby-allsopp.github.io/2017/04/22/coroutines-reference-params.html)
 
 ## What does the Coroutines TS give us?
 
@@ -397,3 +404,173 @@ bool async_manual_reset_event::awaiter::await_suspend(
 ```
 
 ## `Promise` Interface
+
+The `Promise` object defines and controls the behaviour of the coroutine itself by implementing methods that are called at specific points during execution of the coroutine.
+
+当我们书写一个协程方法时，其方法内包含协程的关键字，name这个函数会被编译器转换为以下的形式。
+
+相比于普通的方法，协程方法在真正执行之前，会有一些特定步骤被调用
+
+```cpp
+{
+  co_await promise.initial_suspend();
+  try
+  {
+    <body-statements>
+  }
+  catch (...)
+  {
+    promise.unhandled_exception();
+  }
+FinalSuspend:
+  co_await promise.final_suspend();
+}
+```
+
+通常会有以下步骤
+
+1. Allocate a coroutine frame using operator new (optional).
+2. Copy any function parameters to the coroutine frame.
+3. Call the constructor for the promise object of type, P.
+4. Call the promise.get_return_object() method to obtain the result to return to the caller when the coroutine first suspends. Save the result as a local variable.
+5. Call the promise.initial_suspend() method and co_await the result.
+6. When the co_await promise.initial_suspend() expression resumes (either immediately or asynchronously), then the coroutine starts executing the coroutine body statements that you wrote.
+
+如果执行到 co_return 语句：
+
+1. Call promise.return_void() or promise.return_value(<expr>)
+2. Destroy all variables with automatic storage duration in reverse order they were created.
+3. Call promise.final_suspend() and co_await the result.
+
+如果在执行过程中抛出了未处理的异常
+
+1. Catch the exception and call promise.unhandled_exception() from within the catch-block.
+2. Call promise.final_suspend() and co_await the result.
+
+删除协程帧也会包含一些步骤：
+
+1. Call the destructor of the promise object.
+2. Call the destructors of the function parameter copies.
+3. Call operator delete to free the memory used by the coroutine frame (optional)
+4. Transfer execution back to the caller/resumer.
+
+### 分配协程帧
+
+- `Promise` 类型可以重载 `operator new`，否则编译器将调用全局的 `operator new` 来构造协程帧。需要注意：
+  - 传递给 operator new 的大小并不是 sizeof(Promise)，而是编译器根据协程参数的大小数量、Promise大小、局部变量的大小和数量等自动计算出来的大小
+  - 编译器在一些条件下可以省略对 operator new 的调用，直接在调用者的栈帧上为协程分配内存
+    - 如果协程帧的生命周期严格的小于调用者的生命周期，并且
+    - 编译器能够在调用点看到协程帧所需要的大小
+  - 标准未定义什么场景下，对 operator new 的省略一定会发生，所以请保持代码的鲁棒性
+  - 在不适合使用`exception`的场景下，Promise 也提供了另外的选择，如果定义了一个静态方法 `P::get_return_object_on_allocation_failure()`，name编译器会重载一个 `operator new(size_t, nothrow_t)`，并在该调用返回nullptr的时候立刻调用静态方法，并将结果返回给调用者，而不是直接抛出一个异常
+
+#### Customising coroutine frame memory allocaiton
+
+```cpp
+struct my_promise_type {
+  void * operator new(std::size_t size) {
+    void *p = my_custom_allocate(size);
+    if {!p} throw std::bad_alloc{};
+    return p;
+  }
+
+  void operator delete(void *p, std::size_t size) {
+    my_custom_free(p, size);
+  }
+};
+```
+
+For example, you can implement operator new so that it allocates extra space after the coroutine frame and use that space to stash a copy of the allocator that can be used to free the coroutine frame memory.
+
+```cpp
+template<typename ALLOCATOR>
+struct my_promise_type
+{
+  template<typename... ARGS>
+  void* operator new(std::size_t sz, std::allocator_arg_t, ALLOCATOR& allocator, ARGS&... args)
+  {
+    // Round up sz to next multiple of ALLOCATOR alignment
+    std::size_t allocatorOffset =
+      (sz + alignof(ALLOCATOR) - 1u) & ~(alignof(ALLOCATOR) - 1u);
+
+    // Call onto allocator to allocate space for coroutine frame.
+    void* ptr = allocator.allocate(allocatorOffset + sizeof(ALLOCATOR));
+
+    // Take a copy of the allocator (assuming noexcept copy constructor here)
+    new (((char*)ptr) + allocatorOffset) ALLOCATOR(allocator);
+
+    return ptr;
+  }
+
+  void operator delete(void* ptr, std::size_t sz)
+  {
+    std::size_t allocatorOffset =
+      (sz + alignof(ALLOCATOR) - 1u) & ~(alignof(ALLOCATOR) - 1u);
+
+    ALLOCATOR& allocator = *reinterpret_cast<ALLOCATOR*>(
+      ((char*)ptr) + allocatorOffset);
+
+    // Move allocator to local variable first so it isn't freeing its
+    // own memory from underneath itself.
+    // Assuming allocator move-constructor is noexcept here.
+    ALLOCATOR allocatorCopy = std::move(allocator);
+
+    // But don't forget to destruct allocator object in coroutine frame
+    allocator.~ALLOCATOR();
+
+    // Finally, free the memory using the allocator.
+    allocatorCopy.deallocate(ptr, allocatorOffset + sizeof(ALLOCATOR));
+  }
+}
+```
+
+即便我们定制了协程的内存分配函数，编译器仍然不保证一定会调用该内存分配函数
+
+### 拷贝参数到协程帧
+
+- 必须拷贝，以保持生命周期合法
+  - passed by value --> copy into 
+  - passed by reference(either lvalue or rvale) --> copy reference into ,not the value they point to 
+- 对于有 trivial destructors 的对象，如果在 <return-to-caller-or-resumer> 之后不存在对该对象的引用，那么编译器可以省略对该对象的copy
+- 在协程场景使用引用传参是比较危险的 ref [Coroutines and Reference Parameters](https://toby-allsopp.github.io/2017/04/22/coroutines-reference-params.html)
+- 如果在copy/move任何参数的过程中抛出了异常，协程会终止，所有已构造好的对象会被释放，协程帧被释放，异常会抛出给调用者
+
+### Constructing the promise object
+
+- 所有参数被copy到协程帧后，协程会构造promise对象
+- 编译器会检查promise的构造函数重载，如果存在使用copy的参数的，则优先调用，否则会调用默认构造函数
+- 遇到异常则终止
+
+### Obtaining the return object
+
+- 协程操作promise对象的第一件事，是获取 return-object，promise.get_return_object()。返回对象是协程在第一次挂起或者执行结束时，返回给调用者的对象。
+  - 提前获取的原因是：协程栈帧有可能在开始执行后的某个点，又当前线程或者其他线程销毁；因此滞后获取时不安全的
+
+```cpp
+// Pretend there's a compiler-generated structure called 'coroutine_frame'
+// that holds all of the state needed for the coroutine. It's constructor
+// takes a copy of parameters and default-constructs a promise object.
+struct coroutine_frame { ... };
+
+T some_coroutine(P param)
+{
+  auto* f = new coroutine_frame(std::forward<P>(param));
+
+  auto returnObject = f->promise.get_return_object();
+
+  // Start execution of the coroutine body by resuming it.
+  // This call will return when the coroutine gets to the first
+  // suspend-point or when the coroutine runs to completion.
+  coroutine_handle<decltype(f->promise)>::from_promise(f->promise).resume();
+
+  // Then the return object is returned to the caller.
+  return returnObject;
+}
+```
+
+### The initial-suspend point
+
+- 协程在完成帧初始化、获取返回值之后，接下来执行的就是 `co_await promise.initial_suspend();`
+  - 这里，promise的作者可以控制，协程是直接执行function body，还是先挂起
+    -如果在这里协程被挂起，那么可以通过coroutine_handle的resume来恢复、destroy来销毁
+- 注意改调用点没有try catch保护，意味着异常发生时，协程会被销毁，异常会抛出给调用者
