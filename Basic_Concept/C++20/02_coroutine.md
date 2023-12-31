@@ -20,6 +20,11 @@
     - [Constructing the promise object](#constructing-the-promise-object)
     - [Obtaining the return object](#obtaining-the-return-object)
     - [The initial-suspend point](#the-initial-suspend-point)
+    - [Returning to the](#returning-to-the)
+    - [Returning from the coroutine using `co_return`](#returning-from-the-coroutine-using-co_return)
+    - [Handling exceptions that propagate out of the coroutine body](#handling-exceptions-that-propagate-out-of-the-coroutine-body)
+    - [The final-suspend point](#the-final-suspend-point)
+    - [How the compiler chooses the promise type](#how-the-compiler-chooses-the-promise-type)
 
 
 ## Refs
@@ -573,4 +578,43 @@ T some_coroutine(P param)
 - 协程在完成帧初始化、获取返回值之后，接下来执行的就是 `co_await promise.initial_suspend();`
   - 这里，promise的作者可以控制，协程是直接执行function body，还是先挂起
     -如果在这里协程被挂起，那么可以通过coroutine_handle的resume来恢复、destroy来销毁
-- 注意改调用点没有try catch保护，意味着异常发生时，协程会被销毁，异常会抛出给调用者
+- 注意该调用点没有try catch保护，意味着异常发生时，协程会被销毁，异常会抛出给调用者
+- 需要确保 return-type 是否包含RAII语义来释放协程帧，防止 double-free
+- 大部分的 initial_suspend 返回 std::experimental::suspend_always 或者 std::experimental::suspend_never，两者都是noexcept awaitable
+
+### Returning to the 
+
+- 当协程执行完、或者到 return-to-caller-or-resume 点时，return-object会被返回给协程的调用者
+- return-object 和协程函数的返回值类型不一定一致，必要的情况下，编译器会执行一个隐式转换
+
+### Returning from the coroutine using `co_return`
+
+当执行到 co_return 时，调用会转变为promise的相关return调用，以及一个 goto FinalSuspend 
+
+- co_return;
+  -> promise.return_void();
+- co_return <expr>;
+ -> <expr>; promise.return_void(); if <expr> has type void
+ -> promise.return_value(<expr>); if <expr> does not have type void
+
+- `goto FinalSuspend` 会释放所有自动存储期的本地变量，释放顺序与构造顺序相反，然后调用 co_await promise.final_suspend()
+- 方法未显式调用 co_return 而执行到尾部时，类似在尾部包含一个 `co_return;`,在这种情况下，如果promise类型未定义 return_void，则会导致UB
+- 此处抛出的异常，会传播到 promise.unhandled_exception()
+
+### Handling exceptions that propagate out of the coroutine body
+
+- 如果异常传播到协程方法体外，则异常会被捕获，并且在catch块中，promise.unhandled_exception()会被调用
+  - 对该方法的典型实现是调用 `std::current_exception()`, 获取异常的copy，之后在别的上下文中抛出
+  - 也可以立即重新抛出异常，这会导致协程立即被销毁。这可能会在 coroutine_handle::resume() noexcept 的情况下导致问题，除非你对resume的调用者有完全的掌控
+
+### The final-suspend point
+
+- 当执行完用户定义的代码时，结果通过 return_void return_value unhandled_exception 返回时，所有的局部变量会被销毁，在将执行权限交还给调用者之前，还可以执行一些逻辑。
+- `co_await promise.final_suspend()`
+  - 这里允许 publishing reautl，signalling completion、resuming a continuation
+  - 或者立即挂起以防止协程执行完，协程帧被销毁
+    - resume一个在该处挂起的协程是UB的，这里仅可以执行destroy
+
+Note that while it is allowed to have a coroutine not suspend at the final_suspend point, it is recommended that you structure your coroutines so that they do suspend at final_suspend where possible. This is because this forces you to call .destroy() on the coroutine from outside of the coroutine (typically from some RAII object destructor) and this makes it much easier for the compiler to determine when the scope of the lifetime of the coroutine-frame is nested inside the caller. This in turn makes it much more likely that the compiler can elide the memory allocation of the coroutine frame.
+
+### How the compiler chooses the promise type
