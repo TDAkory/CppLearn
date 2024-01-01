@@ -25,6 +25,7 @@
     - [Handling exceptions that propagate out of the coroutine body](#handling-exceptions-that-propagate-out-of-the-coroutine-body)
     - [The final-suspend point](#the-final-suspend-point)
     - [How the compiler chooses the promise type](#how-the-compiler-chooses-the-promise-type)
+    - [Identifying a specific cotoutine activation frame](#identifying-a-specific-cotoutine-activation-frame)
 
 
 ## Refs
@@ -618,3 +619,109 @@ T some_coroutine(P param)
 Note that while it is allowed to have a coroutine not suspend at the final_suspend point, it is recommended that you structure your coroutines so that they do suspend at final_suspend where possible. This is because this forces you to call .destroy() on the coroutine from outside of the coroutine (typically from some RAII object destructor) and this makes it much easier for the compiler to determine when the scope of the lifetime of the coroutine-frame is nested inside the caller. This in turn makes it much more likely that the compiler can elide the memory allocation of the coroutine frame.
 
 ### How the compiler chooses the promise type
+
+- 编译器选择promise类型的方式是根据协程签名来进行类型萃取，std::experimental::coroutine_traits
+
+如果有一个协程的函数签名如下
+
+```cpp
+task<float> foo(std::string x, bool flag);
+```
+
+那么编译器会将函数返回值和入参传递给萃取器，来推导promise的类型
+
+```cpp
+typename coroutine_traits<task<float>, std::string, bool>::promise_type;
+```
+
+如果协程函数是非静态成员函数，那么类类型会作为第二个模板参数传递进来。如果协程函数是一个右值引用的重载，那么模板参数也会是一个右值引用
+
+```cpp
+task<void> my_class::method1(int x) const;
+task<foo> my_class::method2() &&;
+
+// method1 promise type
+typename coroutine_traits<task<void>, const my_class&, int>::promise_type;
+
+// method2 promise type
+typename coroutine_traits<task<foo>, my_class&&>::promise_type;
+```
+
+coroutine_traits 的默认实现是嵌套获取用户定义的 promise_type
+
+```cpp
+namespace std::experimental
+{
+  template<typename RET, typename... ARGS>
+  struct coroutine_traits<RET, ARGS...>
+  {
+    using promise_type = typename RET::promise_type;
+  };
+}
+```
+
+如果你无法修改协程函数的返回值来定义其promise_type，那么你也可以重载一个coroutine_traits实现
+
+```cpp
+namespace std::experimental
+{
+  template<typename T, typename... ARGS>
+  struct coroutine_traits<std::optional<T>, ARGS...>
+  {
+    using promise_type = optional_promise<T>;
+  };
+}
+```
+
+### Identifying a specific cotoutine activation frame
+
+当一个协程方法被调用的时候，一个协程帧会被创建。那么如何保存对这个协程帧的引用呢？提案给出的方式是通过 `coroutine_handle` 类型，其接口定义可以类比如下：
+
+```cpp
+namespace std::experimental
+{
+  template<typename Promise = void>
+  struct coroutine_handle;
+
+  // Type-erased coroutine handle. Can refer to any kind of coroutine.
+  // Doesn't allow access to the promise object.
+  template<>
+  struct coroutine_handle<void>
+  {
+    // Constructs to the null handle.
+    constexpr coroutine_handle();
+
+    // Convert to/from a void* for passing into C-style interop functions.
+    constexpr void* address() const noexcept;
+    static constexpr coroutine_handle from_address(void* addr);
+
+    // Query if the handle is non-null.
+    constexpr explicit operator bool() const noexcept;
+
+    // Query if the coroutine is suspended at the final_suspend point.
+    // Undefined behaviour if coroutine is not currently suspended.
+    bool done() const;
+
+    // Resume/Destroy the suspended coroutine
+    void resume();
+    void destroy();
+  };
+
+  // Coroutine handle for coroutines with a known promise type.
+  // Template argument must exactly match coroutine's promise type.
+  template<typename Promise>
+  struct coroutine_handle : coroutine_handle<>
+  {
+    using coroutine_handle<>::coroutine_handle;
+
+    static constexpr coroutine_handle from_address(void* addr);
+
+    // Access to the coroutine's promise object.
+    Promise& promise() const;
+
+    // You can reconstruct the coroutine handle from the promise object.
+    static coroutine_handle from_promise(Promise& promise);
+  };
+}
+```
+
