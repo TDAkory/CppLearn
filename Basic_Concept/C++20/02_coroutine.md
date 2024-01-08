@@ -45,6 +45,8 @@
 - [Coroutines and Reference Parameters](https://toby-allsopp.github.io/2017/04/22/coroutines-reference-params.html)
 
 - [Yet Another C++ Coroutine Tutorial](https://theshoemaker.de/posts/yet-another-cpp-coroutine-tutorial)
+- [andreasbuhr cppcoro](https://github.com/andreasbuhr/cppcoro)
+- [C++20 Coroutines and io_uring](https://pabloariasal.github.io/2022/11/12/couring-1/)
 
 ## What does the Coroutines TS give us?
 
