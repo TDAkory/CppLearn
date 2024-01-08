@@ -26,15 +26,25 @@
     - [The final-suspend point](#the-final-suspend-point)
     - [How the compiler chooses the promise type](#how-the-compiler-chooses-the-promise-type)
     - [Identifying a specific cotoutine activation frame](#identifying-a-specific-cotoutine-activation-frame)
+    - [自定义 co\_await 的行为](#自定义-co_await-的行为)
+    - [自定义 co\_yield 的行为](#自定义-co_yield-的行为)
+  - [Understanding Symmetric Transfer](#understanding-symmetric-transfer)
+    - [how a task coroutine works](#how-a-task-coroutine-works)
+    - [TODO 一大串没看懂 。。。。。。](#todo-一大串没看懂-)
 
 
 ## Refs
 
 - [Coroutine Theory](https://lewissbaker.github.io/2017/09/25/coroutine-theory)
 - [C++ Coroutines: Understanding operator co_await](https://lewissbaker.github.io/2017/11/17/understanding-operator-co-await)
+- [C++ Coroutines: Understanding the promise type](https://lewissbaker.github.io/2018/09/05/understanding-the-promise-type)
+- [C++ Coroutines: Understanding Symmetric Transfer](https://lewissbaker.github.io/2020/05/11/understanding_symmetric_transfer)
+- [C++ Coroutines: Understanding the Compiler Transform](https://lewissbaker.github.io/2022/08/27/understanding-the-compiler-transform)
 
 - [Coroutines](https://en.cppreference.com/w/cpp/language/coroutines)
 - [Coroutines and Reference Parameters](https://toby-allsopp.github.io/2017/04/22/coroutines-reference-params.html)
+
+- [Yet Another C++ Coroutine Tutorial](https://theshoemaker.de/posts/yet-another-cpp-coroutine-tutorial)
 
 ## What does the Coroutines TS give us?
 
@@ -229,7 +239,7 @@ Time     Thread 1                           Thread 2
                                             Load coroutine_handle from operation
                                             Call handle.resume()
                                               <resume-point>
-                                              Call to await_resume()
+                                              Call to 8()
                                               execution continues....
            Call to AsyncFileRead returns
          Call to await_suspend() returns
@@ -725,3 +735,133 @@ namespace std::experimental
 }
 ```
 
+- 可以通过以下两种方式获取handle
+  - 在`co_await`表达式中作为参数被传递给 `await_suspend()`
+  - 若持有`promise`，则可以重新构造出handle `coroutine_hande<Promise>::from_promise()`
+- coroutine_handle 不是一个 RAII 类型
+
+### 自定义 co_await 的行为
+
+通过定义 `Promise::await_transform()` 方法，编译器会自动将每个 `co_await <expr>` 转换为 `co_await promise.await_transform(<expr>)` 。
+
+- lets you enable awaiting types that would not normally be awaitable.
+- lets you disallow awaiting on certain types by declaring await_transform overloads as deleted.
+- lets you adapt and change the behaviour of normally awaitable values
+
+### 自定义 co_yield 的行为
+
+If the co_yield keyword appears in a coroutine then the compiler translates the expression co_yield <expr> into the expression co_await promise.yield_value(<expr>). 
+
+## Understanding Symmetric Transfer
+
+> “symmetric transfer” which allows you to suspend one coroutine and resume another coroutine without consuming any additional stack-space.
+
+### how a task coroutine works
+
+```cpp
+task foo() {
+  co_return;
+}
+
+task bar() {
+  co_await foo();
+}
+```
+
+Let’s unpack what’s happening here when `bar()` evaluates `co_await foo()`:
+
+- The bar() coroutine calls the foo() function. Note that from the caller’s perspective a coroutine is just an ordinary function.
+- The invocation of foo() performs a few steps:
+  - Allocates storage for a coroutine frame (typically on the heap)
+  - Copies parameters into the coroutine frame (in this case there are no parameters so this is a no-op).
+  - Constructs the promise object in the coroutine frame
+  - Calls promise.get_return_object() to get the return-value for foo(). This produces the task object that will be returned, initialising it with a std::coroutine_handle that refers to the coroutine frame that was just created.
+  - Suspends execution of the coroutine at the initial-suspend point (ie. the open curly brace)
+  - Returns the task object back to bar().
+- Next the bar() coroutine evaluates the co_await expression on the task returned from foo().
+  - The bar() coroutine suspends and then calls the await_suspend() method on the returned task, passing it the std::coroutine_handle that refers to bar()’s coroutine frame.
+  - The await_suspend() method then stores bar()’s std::coroutine_handle in foo()’s promise object and then resumes the foo() coroutine by calling .resume() on foo()’s std::coroutine_handle.
+- The foo() coroutine executes and runs to completion synchronously.
+- The foo() coroutine suspends at the final-suspend point (ie. the closing curly brace) and then resumes the coroutine identified by the std::coroutine_handle that was stored in its promise object before it was started. ie. bar()’s coroutine.
+- The bar() coroutine resumes and continues executing and eventually reaches the end of the statement containing the co_await expression at which point it calls the destructor of the temporary task object returned from foo().
+- The task destructor then calls the .destroy() method on foo()’s coroutine handle which then destroys the coroutine frame along with the promise object and copies of any arguments.
+
+```cpp
+class task {
+  public:
+    class promise_type {
+      public:
+        task get_return_object() noexcept {
+          return task{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+
+        //  we want the coroutine to initially suspend at the open curly brace so that we can later resume the coroutine from this point when the returned task is awaited.
+        // 1. 可以提前获取到对应的 coroutine_handle，防止由此带来的潜在竞争和同步开销
+        // 2. 可以放心的由 task 的析构释放协程帧，不需要担心协程是否由其他线程已经执行完成而造成二次释放。同时利于编译器优化
+        // 3. 增加了异常安全，如果调用者没有选择立刻 co_await returned_task, 而是执行了一些其他逻辑并出现了异常，这时可以放心地释放协程帧（因为我们知道其尚未执行），省去了很多麻烦的考虑（detaching、dangling reference、block in destructor、terminate、UB）
+        std::suspend_always initial_suspend() noexcept { return {}; }
+
+        // This method doesn’t actually need to do anything, it just needs to exist so that the compiler knows that co_return; is valid within this coroutine type.
+        void return_void() noexcept {}
+
+        // called if an exception escapes the body of the coroutine.
+        void unhandled_exception() noexcept {
+          std::terminate();
+        }
+
+        // when the coroutine execution reaches the closing curly brace, we want the coroutine to suspend at the final-suspend point and then resume its continuation. ie. the coroutine that is awaiting the completion of this coroutine.
+        // 1. 将调用者恢复执行的动作延迟到当前协程挂起之后，是因为调用者可能会立即调用task.destructor释放协程帧，但对协程帧的释放，只有在协程挂起的状态下才是合法的，否则可能导致UB
+        // 2. It’s important to note that the coroutine is not yet in a suspended state when the final_suspend() method is invoked. We need to wait until the await_suspend() method on the returned awaitable is called before the coroutine is suspended.
+        struct final_awaiter {
+          bool await_ready() noexcept { return false; }
+
+          void await_suspend(std::coroutine_handle<promise_type> h) noexcept {
+            h.promise().continuation.resume();
+          }
+
+          void await_resume() noexcept {}
+        };
+
+        final_awaiter final_suspend() noexcept { return {}; }
+
+        std::coroutine_handle<> continuation;
+    };
+
+    task(task &&t) noexcept : coro_(std::exchange(t,coro, {})) {}
+
+    ~task() {   // RAII ensure
+      if (coro_)
+        coro_.destroy();
+    }
+
+    class awaiter {
+      public:
+        bool await_ready() noexcept { return false; }
+
+        void await_suspend(std::coroutine_handle<> continuation) noexcept {
+          // Store the continuation in the task's promise so that the final_suspend()
+          // knows to resume this coroutine when the task completes.
+          coro_.promise().continuation = continuation;
+          // Then we resume the task's coroutine, which is currently suspended
+          // at the initial-suspend-point (ie. at the open curly brace).
+          coro_.resume();
+        }
+
+        void await_resume() noexcept {}
+
+      private:
+        explicit awaiter(std::coroutine_handle<task::promise_type> h) noexcept : coro_(h) {}
+
+        std::coroutine_handle<task::promise_type> coro_;
+    };
+
+    awaiter operator co_await() && noexcept { return awaiter{coro_}; }
+
+  private:
+    explicit task(std::coroutine_handle<promise_type> h) noexcept : coro_(h) {}
+
+    std::coroutine_handle<promise_type> coro_;
+};
+```
+
+### TODO 一大串没看懂 。。。。。。
