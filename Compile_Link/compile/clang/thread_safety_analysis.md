@@ -1,0 +1,3 @@
+# [Thread Safety Analysis](https://clang.llvm.org/docs/ThreadSafetyAnalysis.html)
+
+Clang Thread Safety Analysis is a C++ language extension which warns about potential race conditions in code. The analysis is completely static (i.e. compile-time); there is no run-time overhead. The analysis is still under active development, but it is mature enough to be deployed in an industrial setting. It is being developed by Google, in collaboration with CERT/SEI, and is used extensively in Google’s internal code base.

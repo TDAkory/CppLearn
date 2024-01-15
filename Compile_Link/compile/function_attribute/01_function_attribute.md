@@ -1,5 +1,13 @@
 # [Function Attributes](https://gcc.gnu.org/onlinedocs/gcc/Function-Attributes.html)
 
+`__attribute__` 是一个编译器指令，其实是 GNU C 的一种机制，本质是一个编译器的指令，在声明的时候可以提供一些属性，在编译阶段起作用，来做多样化的错误检查和高级优化。用于在 C、C++、Objective-C 中修饰变量、函数、参数、方法、类等。
+
+给编译器提供上下文，帮助编译器做优化，合理使用可以收到显著的优化效果。
+编译器会根据 `__attribute__` 产生一些编译警告，使代码更规范。
+给代码阅读者提供必要的注解，助其理解代码意图。
+
+总之，`__attribute__` 起到了给编译器提供上下文的作用，如果错误的使用 `__attribute__` 指令，因为给编译器提供了错误的上下文，由此引起的错误通常很难被发现。
+
 - [IBM](https://www.ibm.com/docs/en/xl-c-and-cpp-aix/16.1?topic=compatibility-function-attributes)
 
 几种写法格式：

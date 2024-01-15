@@ -54,7 +54,24 @@ void AppendInternalKey(std::string* result, const ParsedInternalKey& key) {
 Memtable的查询接口传入的是LookupKey，它也是由User Key和Sequence Number组合而成的。
 
 ```cpp
-LookupKey::LookupKey(const Slice& user_key, SequenceNumber s)
+LookupKey::LookupKey(const Slice& user_key, SequenceNumber s) {
+  size_t usize = user_key.size();
+  size_t needed = usize + 13;  // A conservative estimate
+  char* dst;
+  if (needed <= sizeof(space_)) {
+    dst = space_;
+  } else {
+    dst = new char[needed];
+  }
+  start_ = dst;                           // buf 起始
+  dst = EncodeVarint32(dst, usize + 8);   // Size 
+  kstart_ = dst;                          // user_key  起始
+  std::memcpy(dst, user_key.data(), usize);
+  dst += usize;
+  EncodeFixed64(dst, PackSequenceAndType(s, kValueTypeForSeek));
+  dst += 8;
+  end_ = dst;
+}
 
 // | Size (int32变长)| User key (string) | sequence number (7 bytes) | value type (1 byte) |
 ```

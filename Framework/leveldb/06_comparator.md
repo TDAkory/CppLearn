@@ -50,6 +50,7 @@ class LEVELDB_EXPORT Comparator {
 ## BytewiseComparatorImpl
 
 ```cpp
+// FindShortestSeparator找到start、limit之间最短的字符串，如“helloworld”和”hellozoomer”之间最短的key可以是”hellox”。
 virtual void FindShortestSeparator(std::string* start, 
                                    onst Slice& limit) const 
 {
@@ -67,22 +68,22 @@ virtual void FindShortestSeparator(std::string* start,
   } 
   else 
   {
-     // 尝试执行字符start[diff_index]++，
-        设置start长度为diff_index+1，并返回
+     // 尝试执行字符start[diff_index]++，设置start长度为diff_index+1，并返回
      // ++条件：字符< oxff 并且字符+1 < limit上该index的字符
      uint8_t diff_byte = static_cast<uint8_t>((*start)[diff_index]);
      if (diff_byte < static_cast<uint8_t>(0xff) &&
          diff_byte + 1 < static_cast<uint8_t>(limit[diff_index])) 
      {
-         (*start)[diff_index]++;
-         start->resize(diff_index + 1);
-          assert(Compare(*start, limit) < 0);
+        (*start)[diff_index]++;
+        start->resize(diff_index + 1);
+        assert(Compare(*start, limit) < 0);
      }
   }
 }
 ```
 
 ```cpp
+// FindShortSuccessor则更极端，用于找到比key大的最短字符串，如传入“helloworld”，返回的key可能是“i”而已。
 void FindShortSuccessor(std::string* key) const override {
     // 找到第一个可以++的字符，执行++后，截断字符串；
     // 如果找不到说明*key的字符都是0xff啊，那就不作修改，直接返回

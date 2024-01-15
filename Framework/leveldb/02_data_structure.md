@@ -25,7 +25,7 @@ leveldb是一种基于operation log的文件系统，是Log-Structured-Merge Tre
 ```cpp
 state_[0..3] == 消息message长度 
 
-state_[4]    == 消息code
+state_[4]    == 消息codeLRU
 
 state_[5..]  == 消息message 
 ```
@@ -40,7 +40,59 @@ state_[5..]  == 消息message
 
 ### Cache
 
-双链表实现的LRUCache
+> util/cache.cc
+
+双链表 + hash table 实现的LRUCache
+
+```cpp
+struct LRUHandle {
+  void* value;
+  void (*deleter)(const Slice&, void* value);
+  LRUHandle* next_hash; // 节点在hash table链表中的下一个hash(key)相同的元素
+  LRUHandle* next;      // 节点在双向链表中的前驱后继节点指针
+  LRUHandle* prev;
+  size_t charge;  // TODO(opt): Only allow uint32_t?
+  size_t key_length;
+  bool in_cache;     // Whether entry is in the cache.
+  uint32_t refs;     // References, including cache reference, if present.
+  uint32_t hash;     // Hash of key(); used for fast sharding and comparisons
+  char key_data[1];  // Beginning of key
+
+  Slice key() const {
+    // next is only equal to this if the LRU handle is the list head of an
+    // empty list. List heads never have meaningful keys.
+    assert(next != this);
+
+    return Slice(key_data, key_length);
+  }
+};
+```
+
+使用了自己实现的 HandleTable 作为哈希表
+
+```cpp
+class LRUCache {
+  ...
+  // Dummy head of LRU list.
+  // lru.prev is newest entry, lru.next is oldest entry.
+  // Entries have refs==1 and in_cache==true.
+  LRUHandle lru_ GUARDED_BY(mutex_);
+
+  // Dummy head of in-use list.
+  // Entries are in use by clients, and have refs >= 2 and in_cache==true.
+  LRUHandle in_use_ GUARDED_BY(mutex_);
+
+  HandleTable table_ GUARDED_BY(mutex_);
+};
+```
+
+```cpp
+class ShardedLRUCache : public Cache {
+ private:
+  LRUCache shard_[kNumShards];  // 分片，减小锁粒度
+  ...
+};
+```
 
 ### Others
 
