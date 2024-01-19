@@ -10,6 +10,7 @@
     - [Read Interface](#read-interface)
     - [Iterator](#iterator)
   - [Build SSTable](#build-sstable)
+    - [添加记录](#添加记录)
 
 
 > doc/table_format.md
@@ -406,4 +407,98 @@ void Seek(const Slice& target) override {
 
 ## Build SSTable
 
-> table/table_builder.cc
+> table/table_builder.cc  include/leveldb/table_builder.h
+
+```cpp
+class LEVELDB_EXPORT TableBuilder {
+  // Add key,value to the table being constructed.
+  // REQUIRES: key is after any previously added key according to comparator.
+  // REQUIRES: Finish(), Abandon() have not been called
+  void Add(const Slice& key, const Slice& value);
+
+  // Advanced operation: flush any buffered key/value pairs to file.
+  // Can be used to ensure that two adjacent entries never live in
+  // the same data block.  Most clients should not need to use this method.
+  // REQUIRES: Finish(), Abandon() have not been called
+  void Flush();
+
+  // Finish building the table.  Stops using the file passed to the
+  // constructor after this function returns.
+  // REQUIRES: Finish(), Abandon() have not been called
+  Status Finish();
+
+  // Indicate that the contents of this builder should be abandoned.  Stops
+  // using the file passed to the constructor after this function returns.
+  // If the caller is not going to call Finish(), it must call Abandon()
+  // before destroying this builder.
+  // REQUIRES: Finish(), Abandon() have not been called
+  void Abandon();
+};
+```
+
+类成员定义在 `struct TableBuilder::Rep` 中
+
+```cpp
+struct TableBuilder::Rep {
+  Options options;              // data block 配置参数
+  Options index_block_options;  // index block 配置参数 
+  WritableFile* file;           // sstable 文件
+  uint64_t offset;              // 写入偏移，起始0
+  Status status;                 
+  BlockBuilder data_block;      
+  BlockBuilder index_block;
+  std::string last_key;         // 当前data block的最后一个kv
+  int64_t num_entries;          // 当前 data block 的个数
+  bool closed;  // Either Finish() or Abandon() has been called.
+  FilterBlockBuilder* filter_block; // 可以快速定位key是否在block中
+  bool pending_index_entry;         // 初始 false
+  BlockHandle pending_handle;       // Handle to add to index block
+  std::string compressed_output;    // 压缩后的data block，写出后清空
+};
+```
+
+### 添加记录
+
+```cpp
+void TableBuilder::Add(const Slice& key, const Slice& value) {
+  Rep* r = rep_;
+  // 1. 文件保持打开，并且状态OK，否则返回
+  assert(!r->closed);   
+  if (!ok()) return;
+  // 2. 入参 key 必须大于已写入的 last_key
+  if (r->num_entries > 0) {
+    assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
+  }
+  // 3. 如果标记r->pending_index_entry为true，表明遇到下一个data block的第一个k/v
+  if (r->pending_index_entry) {
+    assert(r->data_block.empty());
+    // 根据key调整r->last_key，这是通过Comparator的FindShortestSeparator完成的
+    r->options.comparator->FindShortestSeparator(&r->last_key, key);
+    std::string handle_encoding;
+    r->pending_handle.EncodeTo(&handle_encoding);
+    // 接下来将pending_handle加入到index block中
+    r->index_block.Add(r->last_key, Slice(handle_encoding));
+    r->pending_index_entry = false;
+  }
+  // 更新过滤器
+  if (r->filter_block != nullptr) {
+    r->filter_block->AddKey(key);
+  }
+  // 更新 last_key
+  r->last_key.assign(key.data(), key.size());
+  r->num_entries++;
+  r->data_block.Add(key, value);
+
+  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
+  // 如果当前 data block 的大小超限，则立即刷新文件
+  if (estimated_block_size >= r->options.block_size) {
+    Flush();
+  }
+}
+```
+
+值得讲讲pending_index_entry这个标记的意义，见代码注释：
+
+直到遇到下一个databock的第一个key时，我们才为上一个datablock生成index entry，这样的好处是：可以为index使用较短的key；比如上一个data block最后一个k/v的key是"the quick brown fox"，其后继data block的第一个key是"the who"，我们就可以用一个较短的字符串"the r"作为上一个data block的index block entry的key。
+
+简而言之，就是在开始下一个datablock时，Leveldb才将上一个data block加入到index block中。标记pending_index_entry就是干这个用的，对应data block的index entry信息就保存在（BlockHandle）pending_handle。
