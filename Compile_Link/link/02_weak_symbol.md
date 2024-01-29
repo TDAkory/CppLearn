@@ -1,0 +1,3 @@
+# [weak symbol](https://en.wikipedia.org/wiki/Weak_symbol)
+
+A weak symbol denotes a specially annotated symbol during linking of Executable and Linkable Format (ELF) object files. By default, without any annotation, a symbol in an object file is strong. During linking, a strong symbol can override a weak symbol of the same name. In contrast, in the presence of two strong symbols by the same name, the linker resolves the symbol in favor of the first one found. This behavior allows an executable to override standard library functions, such as malloc(3). When linking a binary executable, a weakly declared symbol does not need a definition. In comparison, (by default) a declared strong symbol without a definition triggers an undefined symbol link error.

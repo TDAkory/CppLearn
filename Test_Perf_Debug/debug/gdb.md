@@ -1,5 +1,14 @@
 # [gdb](https://www.sourceware.org/gdb/)
 
+- [gdb](#gdb)
+  - [Some GDB Tricks](#some-gdb-tricks)
+    - [Info display](#info-display)
+    - [Functions](#functions)
+    - [Breakpoint](#breakpoint)
+    - [Watchpoint](#watchpoint)
+    - [Catchpoint](#catchpoint)
+    - [Print](#print)
+
 ## Some GDB Tricks
 
 ### Info display
@@ -71,4 +80,3 @@
 
 * `x/s $str` 打印ASCII字符串
   * `x/ws $str` 打印宽字符串
-* 
