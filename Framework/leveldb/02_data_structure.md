@@ -94,6 +94,74 @@ class ShardedLRUCache : public Cache {
 };
 ```
 
+### Iterator
+
+> include/leveldb/iterator.h
+
+接口定义类。
+
+比较特殊的是内部包含了一个`CleanupFunction`的链表，允许在iterator被销毁之前调用，执行清理：
+
+```cpp
+class LEVELDB_EXPORT Iterator {
+  ...
+
+  // Clients are allowed to register function/arg1/arg2 triples that
+  // will be invoked when this iterator is destroyed.
+  //
+  // Note that unlike all of the preceding methods, this method is
+  // not abstract and therefore clients should not override it.
+  using  = void (*)(void* arg1, void* arg2);
+  void RegiCleanupFunctionsterCleanup(CleanupFunction function, void* arg1, void* arg2);
+
+private:
+  // Cleanup functions are stored in a single-linked list.
+  // The list's head node is inlined in the iterator.
+  struct CleanupNode {
+    // True if the node is not used. Only head nodes might be unused.
+    bool IsEmpty() const { return function == nullptr; }
+    // Invokes the cleanup function.
+    void Run() {
+      assert(function != nullptr);
+      (*function)(arg1, arg2);
+    }
+
+    // The head node is used if the function pointer is not null.
+    CleanupFunction function;
+    void* arg1;
+    void* arg2;
+    CleanupNode* next;
+  };
+  CleanupNode cleanup_head_;
+};
+```
+
+注册: 若是首次注册，会放在头部，否则会始终插入到第二个位置上。析构时是顺序调用的 
+
+> 去问了为啥，不知道有没回复  https://github.com/google/leveldb/issues/1167
+>
+> https://godbolt.org/z/Kf6YYfnKn
+
+```cpp
+void Iterator::RegisterCleanup(CleanupFunction func, void* arg1, void* arg2) {
+  assert(func != nullptr);
+  CleanupNode* node;
+  if (cleanup_head_.IsEmpty()) {
+    node = &cleanup_head_;
+  } else {
+    node = new CleanupNode();
+    node->next = cleanup_head_.next;
+    cleanup_head_.next = node;
+  }
+  node->function = func;
+  node->arg1 = arg1;
+  node->arg2 = arg2;
+}
+```
+
 ### Others
 
 Random、Hash、CRC32、Histogram
+
+
+云上 1.0 AutoRollup  EBS+TOS

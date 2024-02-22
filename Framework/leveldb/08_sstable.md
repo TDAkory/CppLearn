@@ -11,6 +11,17 @@
     - [Iterator](#iterator)
   - [Build SSTable](#build-sstable)
     - [添加记录](#添加记录)
+    - [Flush文件](#flush文件)
+    - [`WriteBlock`](#writeblock)
+    - [`WriteRawBlock`](#writerawblock)
+    - [`Finish`](#finish)
+  - [Read SSTable](#read-sstable)
+    - [Open](#open)
+      - [`ReadBlock()`](#readblock)
+      - [`ReadMeta()`](#readmeta)
+      - [`ReadFilter()`](#readfilter)
+  - [traverse SSTable](#traverse-sstable)
+    - [TwoLevelIterator](#twoleveliterator)
 
 
 > doc/table_format.md
@@ -497,8 +508,382 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
 }
 ```
 
-值得讲讲pending_index_entry这个标记的意义，见代码注释：
+值得讲讲`pending_index_entry`这个标记的意义，见代码注释：
 
 直到遇到下一个databock的第一个key时，我们才为上一个datablock生成index entry，这样的好处是：可以为index使用较短的key；比如上一个data block最后一个k/v的key是"the quick brown fox"，其后继data block的第一个key是"the who"，我们就可以用一个较短的字符串"the r"作为上一个data block的index block entry的key。
 
 简而言之，就是在开始下一个datablock时，Leveldb才将上一个data block加入到index block中。标记pending_index_entry就是干这个用的，对应data block的index entry信息就保存在（BlockHandle）pending_handle。
+
+### Flush文件
+
+```cpp
+void TableBuilder::Flush() {
+  Rep* r = rep_;
+  // 首先保证未关闭，且状态ok
+  assert(!r->closed);
+  if (!ok()) return;
+  // 若 datablock 是空的，直接返回
+  if (r->data_block.empty()) return;
+  // 保证pending_index_entry为false，即data block的Add已经完成
+  assert(!r->pending_index_entry);
+  // 写入data block，并设置其index entry信息—BlockHandle对象
+  WriteBlock(&r->data_block, &r->pending_handle);
+  //写入成功，则Flush文件，并设置r->pending_index_entry为true，
+  //以根据下一个data block的first key调整index entry的key—即r->last_key
+  if (ok()) {
+    r->pending_index_entry = true;
+    r->status = r->file->Flush();
+  }
+  if (r->filter_block != nullptr) {
+    //将data block在sstable中的偏移加入到filter block中
+    r->filter_block->StartBlock(r->offset);
+    // 并指明开始新的data block
+  }
+}
+```
+
+### `WriteBlock`
+
+```cpp
+void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
+  // File format contains a sequence of blocks where each block has:
+  //    block_data: uint8[n]
+  //    type: uint8
+  //    crc: uint32
+  assert(ok());
+  Rep* r = rep_;
+  Slice raw = block->Finish();
+  // 获得data block的序列化字符串
+  Slice block_contents;
+  CompressionType type = r->options.compression;
+  // TODO(postrelease): Support more compression options: zlib?
+  switch (type) {
+    case kNoCompression:
+      block_contents = raw;
+      break;
+
+    case kSnappyCompression: {
+      ...
+      break;
+    }
+
+    case kZstdCompression: {
+      ...
+      break;
+    }
+  }
+  // 将data内容写入到文件，并重置block成初始化状态，清空compressedoutput
+  WriteRawBlock(block_contents, type, handle);
+  r->compressed_output.clear();
+  block->Reset();
+}
+```
+
+### `WriteRawBlock`
+
+```cpp
+void TableBuilder::WriteRawBlock(const Slice& block_contents,
+                                 CompressionType type, BlockHandle* handle) {
+  Rep* r = rep_;
+  // 更新偏移信息
+  handle->set_offset(r->offset);
+  handle->set_size(block_contents.size());
+  // 写入文件
+  r->status = r->file->Append(block_contents);
+  if (r->status.ok()) {
+    // 写入 1 byte 类型 和 4 byte crc
+    char trailer[kBlockTrailerSize];
+    trailer[0] = type;
+    uint32_t crc = crc32c::Value(block_contents.data(), block_contents.size());
+    crc = crc32c::Extend(crc, trailer, 1);  // Extend crc to cover block type
+    EncodeFixed32(trailer + 1, crc32c::Mask(crc));
+    r->status = r->file->Append(Slice(trailer, kBlockTrailerSize));
+    if (r->status.ok()) {
+      // 写入成功之后，更新下一个data-block的写入位置
+      r->offset += block_contents.size() + kBlockTrailerSize;
+    }
+  }
+}
+```
+
+### `Finish`
+
+调用Finish函数，表明调用者将所有已经添加的k/v对持久化到sstable，并关闭sstable文件。
+
+```cpp
+Status TableBuilder::Finish() {
+  Rep* r = rep_;
+  // 先写入最后一块datablock
+  Flush();
+  assert(!r->closed);
+  r->closed = true; // 标志置位，不允许再添加kv
+
+  BlockHandle filter_block_handle, metaindex_block_handle, index_block_handle;
+
+  // Write filter block
+  if (ok() && r->filter_block != nullptr) {
+    WriteRawBlock(r->filter_block->Finish(), kNoCompression,
+                  &filter_block_handle);
+  }
+
+  // Write metaindex block
+  if (ok()) {
+    BlockBuilder meta_index_block(&r->options);
+    if (r->filter_block != nullptr) {
+      // Add mapping from "filter.Name" to location of filter data
+      std::string key = "filter.";
+      key.append(r->options.filter_policy->Name());
+      std::string handle_encoding;
+      filter_block_handle.EncodeTo(&handle_encoding);
+      meta_index_block.Add(key, handle_encoding);
+    }
+
+    // TODO(postrelease): Add stats and other meta blocks
+    WriteBlock(&meta_index_block, &metaindex_block_handle);
+  }
+
+  // Write index block
+  if (ok()) {
+    if (r->pending_index_entry) { 
+      // 成功Flush过data block，那么需要为最后一块data block设置index block，并加入到index block中
+      r->options.comparator->FindShortSuccessor(&r->last_key);
+      std::string handle_encoding;
+      r->pending_handle.EncodeTo(&handle_encoding);
+      r->index_block.Add(r->last_key, Slice(handle_encoding));
+      r->pending_index_entry = false;
+    }
+    WriteBlock(&r->index_block, &index_block_handle);
+  }
+
+  // Write footer
+  if (ok()) {
+    Footer footer;
+    footer.set_metaindex_handle(metaindex_block_handle);
+    footer.set_index_handle(index_block_handle);
+    std::string footer_encoding;
+    footer.EncodeTo(&footer_encoding);
+    r->status = r->file->Append(footer_encoding);
+    if (r->status.ok()) {
+      r->offset += footer_encoding.size();
+    }
+  }
+  return r->status;
+}
+```
+
+## Read SSTable
+
+> include/leveldb/table.h table/table.cc
+
+```cpp
+// A Table is a sorted map from strings to strings.  Tables are
+// immutable and persistent.  A Table may be safely accessed from
+// multiple threads without external synchronization.
+class LEVELDB_EXPORT Table 
+```
+
+### Open
+
+```cpp
+// Attempt to open the table that is stored in bytes [0..file_size)
+// of "file", and read the metadata entries necessary to allow
+// retrieving data from the table.
+//
+// If successful, returns ok and sets "*table" to the newly opened
+// table.  The client should delete "*table" when no longer needed.
+// If there was an error while initializing the table, sets "*table"
+// to nullptr and returns a non-ok status.  Does not take ownership of
+// "*source", but the client must ensure that "source" remains live
+// for the duration of the returned table's lifetime.
+//
+// *file must remain live while this Table is in use.
+Status Table::Open(const Options& options, RandomAccessFile* file,
+                   uint64_t size, Table** table) {
+  *table = nullptr;
+  if (size < Footer::kEncodedLength) {    // 文件太短，报错误
+    return Status::Corruption("file is too short to be an sstable");
+  }
+  // 先读Footer
+  char footer_space[Footer::kEncodedLength];
+  Slice footer_input;
+  Status s = file->Read(size - Footer::kEncodedLength, Footer::kEncodedLength,
+                        &footer_input, footer_space);
+  if (!s.ok()) return s;
+
+  Footer footer;
+  s = footer.DecodeFrom(&footer_input);
+  if (!s.ok()) return s;
+
+  // Read the index block
+  BlockContents index_block_contents;
+  ReadOptions opt;
+  if (options.paranoid_checks) {
+    opt.verify_checksums = true;
+  }
+  s = ReadBlock(file, opt, footer.index_handle(), &index_block_contents);
+
+  if (s.ok()) {
+    // We've successfully read the footer and the index block: we're
+    // ready to serve requests.
+    Block* index_block = new Block(index_block_contents);
+    Rep* rep = new Table::Rep;  
+    rep->options = options;
+    rep->file = file;
+    rep->metaindex_handle = footer.metaindex_handle();
+    rep->index_block = index_block;
+    rep->cache_id = (options.block_cache ? options.block_cache->NewId() : 0); // 如果option打开了cache，还要为table创建cache
+    rep->filter = nullptr;
+    *table = new Table(rep);  // 构建table对象
+    (*table)->ReadMeta(footer); // 读取metaindex数据构建filter policy
+  }
+
+  return s;
+}
+```
+
+#### `ReadBlock()`
+
+```cpp
+// table/format.cc
+Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
+                 const BlockHandle& handle, BlockContents* result) {
+  // 初始化结果result
+  result->data = Slice();
+  result->cachable = false;
+  result->heap_allocated = false;
+
+  // Read the block contents as well as the type/crc footer.
+  // See table_builder.cc for the code that built this structure.
+  size_t n = static_cast<size_t>(handle.size());
+  char* buf = new char[n + kBlockTrailerSize];  // kBlockTrailerSize=5 : 1-byte type + 32-bit crc
+  Slice contents;
+  Status s = file->Read(handle.offset(), n + kBlockTrailerSize, &contents, buf);
+  if (!s.ok()) {
+    delete[] buf;
+    return s;
+  }
+  if (contents.size() != n + kBlockTrailerSize) {
+    delete[] buf;
+    return Status::Corruption("truncated block read");
+  }
+
+  // Check the crc of the type and the block contents
+  const char* data = contents.data();  // Pointer to where Read put the data
+  // 如果要求校验crc
+  if (options.verify_checksums) {
+    const uint32_t crc = crc32c::Unmask(DecodeFixed32(data + n + 1));
+    const uint32_t actual = crc32c::Value(data, n + 1);
+    if (actual != crc) {
+      delete[] buf;
+      s = Status::Corruption("block checksum mismatch");
+      return s;
+    }
+  }
+  // 根据type指定的存储类型，如果是非压缩的，则直接取数据赋给result，否则先解压，把解压结果赋给result
+  switch (data[n]) {
+    case kNoCompression:
+      ...
+      // Ok
+      break;
+    case kSnappyCompression: {
+      ...
+      break;
+    }
+    case kZstdCompression: {
+      ...
+      break;
+    }
+    default:
+      delete[] buf;
+      return Status::Corruption("bad block type");
+  }
+
+  return Status::OK();
+}
+```
+
+#### `ReadMeta()`
+
+```cpp
+void Table::ReadMeta(const Footer& footer) {
+  // 不需要metadata
+  if (rep_->options.filter_policy == nullptr) {
+    return;  // Do not need any metadata
+  }
+
+  // TODO(sanjay): Skip this if footer.metaindex_handle() size indicates
+  // it is an empty block.
+  ReadOptions opt;
+  if (rep_->options.paranoid_checks) {
+    opt.verify_checksums = true;
+  }
+  // 根据读取的content构建Block
+  BlockContents contents;
+  if (!ReadBlock(rep_->file, opt, footer.metaindex_handle(), &contents).ok()) {
+    // Do not propagate errors since meta info is not needed for operation
+    return;
+  }
+  Block* meta = new Block(contents);
+  // 找到指定的filter
+  Iterator* iter = meta->NewIterator(BytewiseComparator());
+  std::string key = "filter.";
+  key.append(rep_->options.filter_policy->Name());
+  iter->Seek(key);
+  if (iter->Valid() && iter->key() == Slice(key)) { // 如果找到了就调用ReadFilter构建filter对象
+    ReadFilter(iter->value());
+  }
+  delete iter;
+  delete meta;
+}
+```
+
+#### `ReadFilter()`
+
+```cpp
+void Table::ReadFilter(const Slice& filter_handle_value) {
+  // 从传入的filter_handle_value Decode出BlockHandle，这是filter的偏移和大小
+  Slice v = filter_handle_value;
+  BlockHandle filter_handle;
+  if (!filter_handle.DecodeFrom(&v).ok()) {
+    return;
+  }
+
+  // We might want to unify with ReadBlock() if we start
+  // requiring checksum verification in Table::Open.
+  ReadOptions opt;
+  if (rep_->options.paranoid_checks) {
+    opt.verify_checksums = true;
+  }
+  BlockContents block;
+  if (!ReadBlock(rep_->file, opt, filter_handle, &block).ok()) {
+    return;
+  }
+  // 如果block的heap_allocated为true，表明需要自行释放内存，因此要把指针保存在filter_data中
+  if (block.heap_allocated) {
+    rep_->filter_data = block.data.data();  // Will need to delete later
+  }
+  // 根据读取的data创建FilterBlockReader对象
+  rep_->filter = new FilterBlockReader(rep_->options.filter_policy, block.data);
+}
+```
+
+## traverse SSTable
+
+> Table导出了一个返回Iterator的接口，通过Iterator对象，调用者就可以遍历Table的内容，它简单的返回了一个TwoLevelIterator对象
+
+```cpp
+// Returns a new iterator over the table contents.
+// The result of NewIterator() is initially invalid (caller must
+// call one of the Seek methods on the iterator before using it).
+Iterator* Table::NewIterator(const ReadOptions& options) const {
+  return NewTwoLevelIterator(
+      rep_->index_block->NewIterator(rep_->options.comparator),
+      &Table::BlockReader, const_cast<Table*>(this), options);
+}
+```
+
+### TwoLevelIterator
+
+> table/two_level_iterator.cc
+
+它也是Iterator的子类，之所以叫two level应该是不仅可以迭代其中存储的对象，它还接受了一个函数BlockFunction，可以遍历存储的对象，可见它是专门为Table定制的。 我们已经知道各种Block的存储格式都是相同的，但是各自block data存储的k/v又互不相同，于是我们就需要一个途径，能够在使用同一个方式遍历不同的block时，又能解析这些k/v。这就是BlockFunction，它又返回了一个针对block data的Iterator。Block和block data存储的k/v对的key是统一的。

@@ -59,5 +59,6 @@ description: c++ world
 
 - [call-to-lambda-is-ambiguous-despite-explicitly-stating-the-return-type](https://stackoverflow.com/questions/58627109/call-to-lambda-is-ambiguous-despite-explicitly-stating-the-return-type)
 - [Darts: Double-ARray Trie System](https://www.52nlp.cn/darts-double-array-trie-system-%E7%BF%BB%E8%AF%91%E6%96%87%E6%A1%A3)
+- [Using std::sort() without prefix "std" and also without "using namespace std;" compiles successfully](https://stackoverflow.com/questions/41491995/using-stdsort-without-prefix-std-and-also-without-using-namespace-std-c)
 
 - [2022 年度 C++](https://mp.weixin.qq.com/s/16zJpl4ofVrS9Guo0nhF3Q)
