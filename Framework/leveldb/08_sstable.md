@@ -22,6 +22,10 @@
       - [`ReadFilter()`](#readfilter)
   - [traverse SSTable](#traverse-sstable)
     - [TwoLevelIterator](#twoleveliterator)
+      - [`Seek`](#seek)
+      - [`BlockReader`](#blockreader)
+    - [定位Key](#定位key)
+    - [获取Key](#获取key)
 
 
 > doc/table_format.md
@@ -887,3 +891,238 @@ Iterator* Table::NewIterator(const ReadOptions& options) const {
 > table/two_level_iterator.cc
 
 它也是Iterator的子类，之所以叫two level应该是不仅可以迭代其中存储的对象，它还接受了一个函数BlockFunction，可以遍历存储的对象，可见它是专门为Table定制的。 我们已经知道各种Block的存储格式都是相同的，但是各自block data存储的k/v又互不相同，于是我们就需要一个途径，能够在使用同一个方式遍历不同的block时，又能解析这些k/v。这就是BlockFunction，它又返回了一个针对block data的Iterator。Block和block data存储的k/v对的key是统一的。
+
+```cpp
+// Return a new two level iterator.  A two-level iterator contains an
+// index iterator whose values point to a sequence of blocks where
+// each block is itself a sequence of key,value pairs.  The returned
+// two-level iterator yields the concatenation of all key/value pairs
+// in the sequence of blocks.  Takes ownership of "index_iter" and
+// will delete it when no longer needed.
+//
+// Uses a supplied function to convert an index_iter value into
+// an iterator over the contents of the corresponding block.
+Iterator* NewTwoLevelIterator(
+    Iterator* index_iter,
+    Iterator* (*block_function)(void* arg, const ReadOptions& options,
+                                const Slice& index_value),
+    void* arg, const ReadOptions& options);
+
+  
+class TwoLevelIterator : public Iterator {
+  BlockFunction block_function_;
+  void* arg_;
+  const ReadOptions options_;
+  Status status_;
+  IteratorWrapper index_iter_;  // 遍历block的迭代器
+  IteratorWrapper data_iter_;  // May be nullptr，遍历block data的迭代器
+  // If data_iter_ is non-null, then "data_block_handle_" holds the
+  // "index_value" passed to block_function_ to create the data_iter_.
+  std::string data_block_handle_;
+};
+
+// A internal wrapper class with an interface similar to Iterator that
+// caches the valid() and key() results for an underlying iterator.
+// This can help avoid virtual function calls and also gives better
+// cache locality.
+// table/iterator_wrapper.h
+class IteratorWrapper {};
+```
+
+#### `Seek`
+
+除了`Seek`，还提供了`SeekToFirst` `SeekToLast` `Next` `Prev`
+
+```cpp
+void TwoLevelIterator::Seek(const Slice& target) {
+  index_iter_.Seek(target);   // 查找block的位置
+  InitDataBlock();            // 初始化block的iter
+  if (data_iter_.iter() != nullptr) data_iter_.Seek(target);  // 在block中查找
+  SkipEmptyDataBlocksForward(); // 向前跳过空白的block
+}
+
+void TwoLevelIterator::InitDataBlock() {
+  if (!index_iter_.Valid()) {   // index_iter非法时，给个nullptr
+    SetDataIterator(nullptr); 
+  } else {
+    Slice handle = index_iter_.value();
+    if (data_iter_.iter() != nullptr &&
+        handle.compare(data_block_handle_) == 0) {  
+      // data_iter_ is already constructed with this iterator, so
+      // no need to change anything
+    } else {
+      Iterator* iter = (*block_function_)(arg_, options_, handle);
+      data_block_handle_.assign(handle.data(), handle.size());
+      SetDataIterator(iter);
+    }
+  }
+}
+
+void TwoLevelIterator::SkipEmptyDataBlocksForward() {
+  while (data_iter_.iter() == nullptr || !data_iter_.Valid()) {
+    // Move to next block
+    if (!index_iter_.Valid()) {
+      SetDataIterator(nullptr);
+      return;
+    }
+    index_iter_.Next();
+    InitDataBlock();
+    if (data_iter_.iter() != nullptr) data_iter_.SeekToFirst();
+  }
+}
+```
+
+#### `BlockReader`
+
+> table/table.cc
+
+如下可见，构建迭代器的时候，传入的 BlockFunc 是 `Table::BlockReader`
+
+```cpp
+Iterator* Table::NewIterator(const ReadOptions& options) const {
+  return NewTwoLevelIterator(
+      rep_->index_block->NewIterator(rep_->options.comparator),
+      &Table::BlockReader, const_cast<Table*>(this), options);
+}
+```
+
+```cpp
+// Convert an index iterator value (i.e., an encoded BlockHandle)
+// into an iterator over the contents of the corresponding block.
+Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
+                             const Slice& index_value) {
+  Table* table = reinterpret_cast<Table*>(arg);
+  Cache* block_cache = table->rep_->options.block_cache;
+  Block* block = nullptr;
+  Cache::Handle* cache_handle = nullptr;
+
+  BlockHandle handle;
+  Slice input = index_value;
+  Status s = handle.DecodeFrom(&input); // 从参数中解析出Handle对象，读取Block索引
+  // We intentionally allow extra stuff in index_value so that we
+  // can add more features in the future.
+
+  if (s.ok()) {
+    BlockContents contents;
+    if (block_cache != nullptr) {
+      char cache_key_buffer[16];
+      // cache key的格式是：cache id + offset
+      EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
+      EncodeFixed64(cache_key_buffer + 8, handle.offset());
+      Slice key(cache_key_buffer, sizeof(cache_key_buffer));
+      cache_handle = block_cache->Lookup(key);
+      if (cache_handle != nullptr) {    // 优先从缓存中获取，没命中的情况下再去读文件
+        // cache存在则直接读值
+        block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
+      } else {
+        s = ReadBlock(table->rep_->file, options, handle, &contents);
+        if (s.ok()) {
+          block = new Block(contents);
+          if (contents.cachable && options.fill_cache) {
+            // 插入时同步注册了释放的函数
+            cache_handle = block_cache->Insert(key, block, block->size(),
+                                               &DeleteCachedBlock);
+          }
+        }
+      }
+    } else {
+      s = ReadBlock(table->rep_->file, options, handle, &contents);
+      if (s.ok()) {
+        block = new Block(contents);
+      }
+    }
+  }
+
+  Iterator* iter;
+  if (block != nullptr) {
+    iter = block->NewIterator(table->rep_->options.comparator);
+    if (cache_handle == nullptr) {
+      iter->RegisterCleanup(&DeleteBlock, block, nullptr);
+    } else {
+      iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
+    }
+  } else {
+    iter = NewErrorIterator(s);
+  }
+  return iter;
+}
+```
+
+### 定位Key
+
+并非精确定位，而是在table中找到第一个 >= 指定key的kv对，然后返回其value在sstable文件中的偏移
+
+```cpp
+  // Given a key, return an approximate byte offset in the file where
+  // the data for that key begins (or would begin if the key were
+  // present in the file).  The returned value is in terms of file
+  // bytes, and so includes effects like compression of the underlying data.
+  // E.g., the approximate offset of the last key in the table will
+  // be close to the file length.
+uint64_t Table::ApproximateOffsetOf(const Slice& key) const {
+  Iterator* index_iter =
+      rep_->index_block->NewIterator(rep_->options.comparator);
+  // 调用Block::Iter的Seek函数定位
+  index_iter->Seek(key);
+  uint64_t result;
+  if (index_iter->Valid()) {
+    BlockHandle handle;
+    Slice input = index_iter->value();
+    Status s = handle.DecodeFrom(&input);
+    if (s.ok()) {
+      result = handle.offset(); // 如果index_iter是合法的值，并且Decode成功，返回结果offset
+    } else {
+      // Strange: we can't decode the block handle in the index block.
+      // We'll just return the offset of the metaindex block, which is
+      // close to the whole file size for this case.
+      result = rep_->metaindex_handle.offset(); // 其它情况，设置result为rep_->metaindex_handle.offset()，metaindex的偏移在文件结尾附近
+    }
+  } else {
+    // key is past the last key in the file.  Approximate the offset
+    // by returning the offset of the metaindex block (which is
+    // right near the end of the file).
+    result = rep_->metaindex_handle.offset();
+  }
+  delete index_iter;
+  return result;
+}
+```
+
+### 获取Key
+
+仅被table_cache使用
+
+```cpp
+// Calls (*handle_result)(arg, ...) with the entry found after a call
+// to Seek(key).  May not make such a call if filter policy says
+// that key is not present.
+Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
+                          void (*handle_result)(void*, const Slice&,
+                                                const Slice&)) {
+  Status s;
+  Iterator* iiter = rep_->index_block->NewIterator(rep_->options.comparator);
+  iiter->Seek(k);
+  if (iiter->Valid()) {
+    Slice handle_value = iiter->value();
+    FilterBlockReader* filter = rep_->filter;
+    BlockHandle handle;
+    if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() &&
+        !filter->KeyMayMatch(handle.offset(), k)) {
+      // Not found
+    } else {
+      Iterator* block_iter = BlockReader(this, options, iiter->value());
+      block_iter->Seek(k);
+      if (block_iter->Valid()) {
+        (*handle_result)(arg, block_iter->key(), block_iter->value());
+      }
+      s = block_iter->status();
+      delete block_iter;
+    }
+  }
+  if (s.ok()) {
+    s = iiter->status();
+  }
+  delete iiter;
+  return s;
+}
+```
