@@ -6,11 +6,12 @@
   - [`FilterPolicy`接口](#filterpolicy接口)
   - [`BloomFilterPolicy`](#bloomfilterpolicy)
   - ["filter" Meta Block](#filter-meta-block)
+  - [创建`FilterBlock`](#创建filterblock)
+  - [读取`FilterBlock`](#读取filterblock)
 
 ## `FilterPolicy`接口
 
 注意其 `KeyMayMatch` 接口并不是精确的，入参不在 `CreateFilter` 接口创造的列表中时，仅要求有较高的概率返回`false`。
-
 
 ```cpp
 class LEVELDB_EXPORT FilterPolicy {
@@ -162,3 +163,98 @@ The filter block is formatted as follows:
     lg(base)                              : 1 byte
 
 The offset array at the end of the filter block allows efficient mapping from a data block offset to the corresponding filter.
+
+## 创建`FilterBlock`
+
+> table/filter_block.h
+
+```cpp
+// A FilterBlockBuilder is used to construct all of the filters for a
+// particular Table.  It generates a single string which is stored as
+// a special block in the Table.
+//
+// The sequence of calls to FilterBlockBuilder must match the regexp:
+//      (StartBlock AddKey*)* Finish
+class FilterBlockBuilder {
+ public:
+  explicit FilterBlockBuilder(const FilterPolicy*);
+
+  FilterBlockBuilder(const FilterBlockBuilder&) = delete;
+  FilterBlockBuilder& operator=(const FilterBlockBuilder&) = delete;
+
+  // 开始构建新的filter block，TableBuilder在构造函数和Flush中调用 
+  void StartBlock(uint64_t block_offset);
+
+  // 添加key，TableBuilder每次向data block中加入key时调用
+  void AddKey(const Slice& key);
+
+  // 结束构建，TableBuilder在结束对table的构建时调用
+  Slice Finish();
+
+ private:
+  void GenerateFilter();
+
+  const FilterPolicy* policy_;
+  std::string keys_;             // Flattened key contents
+  std::vector<size_t> start_;    // Starting index in keys_ of each key
+  std::string result_;           // Filter data computed so far
+  std::vector<Slice> tmp_keys_;  // policy_->CreateFilter() argument
+  std::vector<uint32_t> filter_offsets_;
+};
+```
+
+```cpp
+// Generate new filter every 2KB of data
+static const size_t kFilterBaseLg = 11;
+static const size_t kFilterBase = 1 << kFilterBaseLg;
+```
+
+几个函数实现比较简单，这里不再赘述。
+
+## 读取`FilterBlock`
+
+```cpp
+class FilterBlockReader {
+ public:
+  // REQUIRES: "contents" and *policy must stay live while *this is live.
+  FilterBlockReader(const FilterPolicy* policy, const Slice& contents);
+  bool KeyMayMatch(uint64_t block_offset, const Slice& key);
+
+ private:
+  const FilterPolicy* policy_;
+  const char* data_;    // Pointer to filter data (at block-start)
+  const char* offset_;  // Pointer to beginning of offset array (at block-end)
+  size_t num_;          // Number of entries in offset array
+  size_t base_lg_;      // Encoding parameter (see kFilterBaseLg in .cc file)
+};
+
+// 构造Reader 与 创建时：GenerateFilter+Finish 是整体反序的
+FilterBlockReader::FilterBlockReader(const FilterPolicy* policy,
+                                     const Slice& contents)
+    : policy_(policy), data_(nullptr), offset_(nullptr), num_(0), base_lg_(0) {
+  size_t n = contents.size();
+  if (n < 5) return;  // 1 byte for base_lg_ and 4 for start of offset array
+  base_lg_ = contents[n - 1]; // 最后1byte存的是base
+  uint32_t last_word = DecodeFixed32(contents.data() + n - 5);  //偏移数组的位置
+  if (last_word > n - 5) return;
+  data_ = contents.data();
+  offset_ = data_ + last_word;  // 偏移数组开始指针
+  num_ = (n - 5 - last_word) / 4; // 计算出filter个数 
+}
+
+bool FilterBlockReader::KeyMayMatch(uint64_t block_offset, const Slice& key) {
+  uint64_t index = block_offset >> base_lg_;
+  if (index < num_) {
+    uint32_t start = DecodeFixed32(offset_ + index * 4);
+    uint32_t limit = DecodeFixed32(offset_ + index * 4 + 4);
+    if (start <= limit && limit <= static_cast<size_t>(offset_ - data_)) {
+      Slice filter = Slice(data_ + start, limit - start);
+      return policy_->KeyMayMatch(key, filter);
+    } else if (start == limit) {
+      // Empty filters do not match any keys
+      return false;
+    }
+  }
+  return true;  // Errors are treated as potential matches
+}
+```
