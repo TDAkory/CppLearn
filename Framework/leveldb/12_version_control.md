@@ -23,3 +23,155 @@
 - 每当版本发生变化时，新的版本信息就会保存到MANIFEST文件中。
 - MANIFEST文件以版本编辑的形式组织，采用日志文件格式，使用日志的读写方式进行操作。
 - 每个版本编辑都是一条日志记录，这样MANIFEST文件本身就是一个变更日志。
+
+## VersionSet & Version
+
+> db/version_set.h  db/version_edit.h
+
+```cpp
+class Version {
+  VersionSet* vset_;  // VersionSet to which this Version belongs
+  Version* next_;     // Next version in linked list
+  Version* prev_;     // Previous version in linked list
+  int refs_;          // Number of live refs to this version
+
+  // List of files per level
+  std::vector<FileMetaData*> files_[config::kNumLevels];
+
+  // Next file to compact based on seek stats.
+  FileMetaData* file_to_compact_;
+  int file_to_compact_level_;
+
+  // Level that should be compacted next and its compaction score.
+  // Score < 1 means compaction is not strictly needed.  These fields
+  // are initialized by Finalize().
+  double compaction_score_;
+  int compaction_level_;
+};
+```
+
+一个Version就是一个sstable文件集合，以及它管理的compact状态。
+
+```cpp
+class VersionSet {
+  // 第一组，直接来自于DBImple，构造函数传入
+  Env* const env_;
+  const std::string dbname_;
+  const Options* const options_;
+  TableCache* const table_cache_;
+  const InternalKeyComparator icmp_;
+
+  // 第二组，db元信息相关
+  uint64_t next_file_number_;
+  uint64_t manifest_file_number_;
+  uint64_t last_sequence_;
+  uint64_t log_number_;
+  uint64_t prev_log_number_;  // 0 or backing store for memtable being compacted
+
+  // Opened lazily, 第三组，menifest文件相关 
+  WritableFile* descriptor_file_;
+  log::Writer* descriptor_log_;
+
+  // 第四组，版本管理 
+  Version dummy_versions_;  // Head of circular doubly-linked list of versions.
+  Version* current_;        // == dummy_versions_.prev_
+
+  // Per-level key at which the next compaction at that level should start.
+  // Either an empty string, or a valid InternalKey.
+  std::string compact_pointer_[config::kNumLevels];
+};
+```
+
+```cpp
+class VersionEdit {
+    // 成员变量，由此可大概窥得DB元信息的内容。  
+    typedef std::set< std::pair<int, uint64_t> > DeletedFileSet;  
+    std::string comparator_; // key comparator名字  
+    uint64_t log_number_; // 日志编号  
+    uint64_t prev_log_number_; // 前一个日志编号  
+    uint64_t next_file_number_; // 下一个文件编号  
+    SequenceNumber last_sequence_; // 上一个seq  
+    bool has_comparator_; // 是否有comparator  
+    bool has_log_number_;// 是否有log_number_  
+    bool has_prev_log_number_;// 是否有prev_log_number_  
+    bool has_next_file_number_;// 是否有next_file_number_  
+    bool has_last_sequence_;// 是否有last_sequence_  
+    std::vector< std::pair<int, InternalKey> >compact_pointers_; // compact点  
+    DeletedFileSet deleted_files_; // 删除文件集合  
+    std::vector< std::pair<int, FileMetaData> > new_files_; // 新文件集合 
+};
+```
+
+## manifest文件格式
+
+通过 `VersionEdit::EncodeTo` 接口可以得知 `manifest` 中，每一条记录的格式。
+
+首先是使用的coparator名、log编号、前一个log编号、下一个文件编号、上一个序列号。这些都是日志、sstable文件使用到的重要信息，这些字段不一定必然存在。 Leveldb在写入每个字段之前，都会先写入一个varint型数字来标记后面的字段类型。在读取时，先读取此字段，根据类型解析后面的信息。一共有9种类型：
+
+```cpp
+// Tag numbers for serialized VersionEdit.  These numbers are written to
+// disk and should not be changed.
+enum Tag {
+  kComparator = 1,
+  kLogNumber = 2,
+  kNextFileNumber = 3,
+  kLastSequence = 4,
+  kCompactPointer = 5,
+  kDeletedFile = 6,
+  kNewFile = 7,
+  // 8 was used for large value refs
+  kPrevLogNumber = 9
+};
+```
+
+数字都是varint存储格式，string都是以varint指明其长度，后面跟实际的字符串内容。
+
+```cpp
+
+void VersionEdit::EncodeTo(std::string* dst) const {
+  if (has_comparator_) {
+    PutVarint32(dst, kComparator);
+    PutLengthPrefixedSlice(dst, comparator_);
+  }
+  if (has_log_number_) {
+    PutVarint32(dst, kLogNumber);
+    PutVarint64(dst, log_number_);
+  }
+  if (has_prev_log_number_) {
+    PutVarint32(dst, kPrevLogNumber);
+    PutVarint64(dst, prev_log_number_);
+  }
+  if (has_next_file_number_) {
+    PutVarint32(dst, kNextFileNumber);
+    PutVarint64(dst, next_file_number_);
+  }
+  if (has_last_sequence_) {
+    PutVarint32(dst, kLastSequence);
+    PutVarint64(dst, last_sequence_);
+  }
+
+  for (size_t i = 0; i < compact_pointers_.size(); i++) {
+    PutVarint32(dst, kCompactPointer);
+    PutVarint32(dst, compact_pointers_[i].first);  // level
+    PutLengthPrefixedSlice(dst, compact_pointers_[i].second.Encode());
+  }
+
+  for (const auto& deleted_file_kvp : deleted_files_) {
+    PutVarint32(dst, kDeletedFile);
+    PutVarint32(dst, deleted_file_kvp.first);   // level
+    PutVarint64(dst, deleted_file_kvp.second);  // file number
+  }
+
+  for (size_t i = 0; i < new_files_.size(); i++) {
+    const FileMetaData& f = new_files_[i].second;
+    PutVarint32(dst, kNewFile);
+    PutVarint32(dst, new_files_[i].first);  // level
+    PutVarint64(dst, f.number);
+    PutVarint64(dst, f.file_size);
+    PutLengthPrefixedSlice(dst, f.smallest.Encode());
+    PutLengthPrefixedSlice(dst, f.largest.Encode());
+  }
+}
+```
+
+## Version 接口
