@@ -24,6 +24,7 @@ When run in cmake -P script mode, CMake sets the variables CMAKE_BINARY_DIR, CMA
 ## `PUBLIC` `PRIVATE` `INTERFACE`
 
 - [CMAKE 里PRIVATE、PUBLIC、INTERFACE属性示例详解](https://blog.csdn.net/weixin_43862847/article/details/119762230)
+- [cmake：target_** 中的 PUBLIC，PRIVATE，INTERFACE](https://zhuanlan.zhihu.com/p/82244559)
 
 ## `add_library`
 
