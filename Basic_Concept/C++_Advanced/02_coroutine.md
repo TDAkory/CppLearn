@@ -2,8 +2,17 @@
 
 - [Coroutines](#coroutines)
   - [Refs](#refs)
-  - [What does the Coroutines TS give us?](#what-does-the-coroutines-ts-give-us)
-  - [Explain in cppreference](#explain-in-cppreference)
+  - [Basic Ideas](#basic-ideas)
+    - [What does the Coroutines TS give us?](#what-does-the-coroutines-ts-give-us)
+    - [Explain in cppreference](#explain-in-cppreference)
+    - [Understanding](#understanding)
+      - [什么是协程](#什么是协程)
+      - [协程的状态](#协程的状态)
+      - [协程的挂起](#协程的挂起)
+      - [协程的返回值](#协程的返回值)
+      - [协程体的执行](#协程体的执行)
+      - [协程体的返回值](#协程体的返回值)
+      - [协程体抛出异常](#协程体抛出异常)
   - [`Awaitable` Interface](#awaitable-interface)
     - [Awaiters and Awaitables: Explaining operator `co_await`](#awaiters-and-awaitables-explaining-operator-co_await)
     - [Obtaining the Awaiter](#obtaining-the-awaiter)
@@ -47,15 +56,21 @@
 - [Yet Another C++ Coroutine Tutorial](https://theshoemaker.de/posts/yet-another-cpp-coroutine-tutorial)
 - [andreasbuhr cppcoro](https://github.com/andreasbuhr/cppcoro)
 - [C++20 Coroutines and io_uring](https://pabloariasal.github.io/2022/11/12/couring-1/)
+- [渡劫 C++ 协程](https://www.bennyhuo.com/2022/03/09/cpp-coroutines-01-intro/)
 
-## What does the Coroutines TS give us?
+## Basic Ideas
 
-* Three new language keywords: co_await, co_yield and co_return
-* Several new types in the std::experimental namespace:
-  * `coroutine_handle<P>`
+### What does the Coroutines TS give us?
+
+* Three new language keywords: `co_await`, `co_yield` and `co_return`
+* Several new concepts:
+  * `coroutine_state` : 记录协程状态，C++ 协程会在开始执行时的第一步就使用 operator new 来开辟一块内存来存放
+  * `coroutine_handle<P>` : 协程的唯一标识，用于恢复执行或者销毁协程帧
   * `coroutine_traits<Ts...>`
-  * `suspend_always`
-  * `suspend_never`
+  * `promise` : 协程的状态信息，用于存储协程的状态信息，包括协程的返回值、协程的异常信息等
+  * `awaiter` : 用于控制 `co_await` 表达式的语义，包括是否挂起协程、在挂起后执行某些逻辑、在恢复时执行某些逻辑来处理 `co_await` 的返回值。标准库当中提供了两个非常简单直接的等待体
+    * `suspend_always` : 总是挂起
+    * `suspend_never` : 总是不挂起
 * A general mechanism that library writers can use to interact with coroutines and customise their behaviour.
 * A language facility that makes writing asynchronous code a whole lot easier!
 
@@ -63,11 +78,11 @@
 
 提案定义了两类主要的接口：`Promise` `Awaitable`
 
-- `Promise`接口定义了定制协程自身行为的方法：库作者可以定制coroutine在 `called`、`return`、`co_await`\`co_yield` 时的行为
+- `Promise`接口定义了定制协程自身行为的方法：库作者可以定制coroutine在 `called`、`return`、`co_await`、`co_yield` 时的行为
 
 `Awaitable`接口定义了控制`co_await`语义的方法：当一个变量是 `co_await`ed，那么编译器会生成一系列可指定的针对 `awaitable` 变量的方法，这些方法包括：是否挂起协程、在挂起后执行某些逻辑、在恢复时执行某些逻辑来处理`co_await`的返回值。
 
-## Explain in cppreference
+### Explain in cppreference
 
 The unary operator co_await suspends a coroutine and returns control to the caller. Its operand is an expression that either (1) is of **a class type that defines a member operator `co_await`** or may **be passed to a non-member operator `co_await`**, or (2) is **convertible to such a class type by means of the current coroutine's `Promise::await_transform`**.
 
@@ -89,6 +104,144 @@ Then, the awaiter object is obtained, as follows:
 - otherwise, if overload resolution finds no operator co_await, the awaiter is awaitable, as-is.
 - otherwise, if overload resolution is ambiguous, the program is ill-formed.
 
+### Understanding
+
+#### 什么是协程
+
+协程就是一段可以挂起（suspend）和恢复（resume）的程序，一般而言，就是一个支持挂起和恢复的函数。
+
+#### 协程的状态
+
+协程挂起时，我们需要记录函数执行的位置，C++ 协程会在开始执行时的第一步就使用 operator new 来开辟一块内存来存放这些信息，这块内存或者说这个对象又被称为协程的状态（coroutine state）。
+
+#### 协程的挂起
+
+C++ 通过 co_await 表达式来处理协程的挂起，表达式的操作对象则为等待体（awaiter）
+
+**实现了`await_ready`、`await_suspend`、 `await_resume`接口的类型被称为`Awaiter`**
+
+1.  `await_ready` 返回 bool 类型，如果返回 true，则表示已经就绪，无需挂起；否则表示需要挂起。
+
+```cpp
+struct suspend_never {
+  constexpr bool await_ready() const noexcept { return true; }
+  ...
+};
+
+struct suspend_always {
+  constexpr bool await_ready() const noexcept { return false; }
+  ...
+};
+```  
+
+2. `await_ready` 返回 false 时，协程就挂起了。这时候协程的局部变量和挂起点都会被存入协程的状态当中，`await_suspend` 被调用到。
+
+```cpp
+??? await_suspend(std::coroutine_handle<> coroutine_handle);
+```
+
+参数 `coroutine_handle` 用来表示当前协程，`await_suspend` 函数的返回值类型对应着不同的行为：
+  * 返回 void 类型或者返回 true，表示当前协程挂起之后将执行权还给当初调用或者恢复当前协程的函数。
+  * 返回 false，则恢复执行当前协程。注意此时不同于 await_ready 返回 true 的情形，此时协程已经挂起，await_suspend 返回 false 相当于挂起又立即恢复。
+  * 返回其他协程的 coroutine_handle 对象，这时候返回的 coroutine_handle 对应的协程被恢复执行。
+  * 抛出异常，此时当前协程恢复执行，并在当前协程当中抛出异常。
+
+3. 协程恢复执行之后，等待体的 await_resume 函数被调用。同样地，await_resume 的返回值类型也是不限定的，返回值将作为 co_await 表达式的返回值。
+
+```cpp
+??? await_resume()；
+```
+
+#### 协程的返回值
+
+在 C++ 当中，一个函数的返回值类型如果是符合协程的规则的类型，那么这个函数就是一个协程。
+
+这个协程的规则，就是返回值类型能够实例化如下模板。也就是说，返回值类型 _Ret 能够找到一个类型 _Ret::promise_type 与之相匹配。这个 promise_type 既可以是直接定义在 _Ret 当中的类型，也可以通过 using 指向已经存在的其他外部类型。
+
+```cpp
+template <class _Ret, class = void>
+struct _Coroutine_traits {};
+
+template <class _Ret>
+struct _Coroutine_traits<_Ret, void_t<typename _Ret::promise_type>> {
+    using promise_type = typename _Ret::promise_type;
+};
+
+template <class _Ret, class...>
+struct coroutine_traits : _Coroutine_traits<_Ret> {};
+
+struct Result {
+  struct promise_type {
+
+    Result get_return_object() {
+      // 创建 Result 对象
+      return {};
+    }
+
+    ...
+  };
+};
+```
+
+此外，Result对象的创建，应当由 promise_type 通过 get_return_object 接口来获得。不同于一般的函数，协程的返回值并不是在返回之前才创建，而是在协程的状态创建出来之后马上就创建的。也就是说，协程的状态被创建出来之后，会立即构造 promise_type 对象，进而调用 get_return_object 来创建返回值对象。
+
+promise_type 类型的构造函数参数列表如果与协程的参数列表一致，那么构造 promise_type 时就会调用这个构造函数。否则，就通过默认无参构造函数来构造 promise_type。
+
+#### 协程体的执行
+
+在协程的返回值被创建之后，协程体就要被执行了。
+
+1. 为了便于扩展，协程体执行第一步就是调用 `co_await promise.initial_suspend()`，其返回值是一个awaiter，可以通过这个awaiter来实现协程的调度
+2. 然后执行协程体，协程体当中会存在 co_await、co_yield、co_return 三种协程特有的调用
+3. 当协程执行完成或者抛出异常之后会先清理局部变量，接着调用 final_suspend 来方便开发者自行处理其他资源的销毁逻辑。final_suspend 也可以返回一个等待体使得当前协程挂起，但之后当前协程应当通过 coroutine_handle 的 destroy 函数来直接销毁，而不是 resume。
+
+#### 协程体的返回值
+
+```cpp
+// 对于返回一个值的情况，需要在 promise_type 当中定义一个函数
+struct Result {
+  struct promise_type {
+    void return_value(int value) {
+      ...
+    }
+    ...
+  };
+};
+
+Result Coroutine() {
+  ...
+  co_return 1000;   // return_value 函数的参数 value 的值为 1000
+}
+
+// 也支持返回 void。只不过 promise_type 要定义的函数是 return_void 
+struct Result {
+  struct promise_type {
+    void return_void() {
+      ...
+    }
+    ...
+  };
+};
+
+Result Coroutine() {
+  ...
+  co_return;
+};
+```
+
+#### 协程体抛出异常
+
+```cpp
+struct Result {
+  struct promise_type {
+    void unhandled_exception() {
+      exception_ = std::current_exception(); // 获取当前异常
+    }
+    ...
+  };
+};
+```
+
 ## `Awaitable` Interface
 
 ### Awaiters and Awaitables: Explaining operator `co_await`
@@ -107,7 +260,7 @@ Then, the awaiter object is obtained, as follows:
 
 ### Obtaining the Awaiter
 
-编译器首先做的就是为等待值（awaited value）生成包含`Awaiter`对象的代码。
+**编译器首先做的就是为等待值（awaited value）生成包含`Awaiter`对象的代码。**
 
 假设：
 
