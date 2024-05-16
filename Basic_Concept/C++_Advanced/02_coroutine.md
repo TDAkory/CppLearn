@@ -63,6 +63,7 @@
 ### What does the Coroutines TS give us?
 
 * Three new language keywords: `co_await`, `co_yield` and `co_return`
+  * `co_yield expr` 等价于 `co_await promise.yield_value(expr)`
 * Several new concepts:
   * `coroutine_state` : 记录协程状态，C++ 协程会在开始执行时的第一步就使用 operator new 来开辟一块内存来存放
   * `coroutine_handle<P>` : 协程的唯一标识，用于恢复执行或者销毁协程帧
@@ -260,16 +261,17 @@ struct Result {
 
 ### Obtaining the Awaiter
 
-**编译器首先做的就是为等待值（awaited value）生成包含`Awaiter`对象的代码。**
+**编译器首先做的就是为等待值（awaited value）生成包含`Awaiter`对象的代码。**，对于 `co_await <expr>` 表达式当中 `expr` 的处理，C++ 有一套完善的流程：
 
-假设：
+1. 如果 promise_type 当中定义了 await_transform 函数，那么先通过 `promise.await_transform(expr)` 来对 expr 做一次转换，得到的对象称为 awaitable；否则 awaitable 就是 expr 本身。
+2. 接下来使用 awaitable 对象来获取等待体（awaiter）。如果 awaitable 对象有 operator co_await 运算符重载，那么等待体就是 `operator co_await(awaitable)`，否则等待体就是 awaitable 对象本身。
 
-* the promise object for the awaiting coroutine has type P
-* that promise is an l-value reference to the promise object for the current coroutine.
-
-If the promise type, P, has a member named await_transform then <expr> is first passed into a call to `promise.await_transform(<expr>)` to obtain the Awaitable value, awaitable. Otherwise, if the promise type does not have an await_transform member then we use **the result of evaluating <expr> directly** as the Awaitable object, awaitable.
-
-Then, if the Awaitable object, awaitable, has an applicable operator co_await() overload then this is called to obtain the Awaiter object. Otherwise the object, awaitable, is used as the awaiter object.
+> Assume the promise object for the awaiting coroutine has type P
+> And that promise is an l-value reference to the promise object for the current coroutine.
+>
+> If the promise type, P, has a member named await_transform then <expr> is first passed into a call to `promise.await_transform(<expr>)` to obtain the Awaitable value, awaitable. Otherwise, if the promise type does not have an await_transform member then we use **the result of evaluating <expr> directly** as the Awaitable object, awaitable.
+>
+> Then, if the Awaitable object, awaitable, has an applicable operator co_await() overload then this is called to obtain the Awaiter object. Otherwise the object, awaitable, is used as the awaiter object.
 
 用伪代码表述如下：
 
