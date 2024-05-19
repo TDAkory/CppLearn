@@ -228,6 +228,18 @@ Result Coroutine() {
   ...
   co_return;
 };
+
+// 如果调用co_yield，对应的函数是yield_value
+struct Result {
+  struct promist_type {
+    R yield_value(T v);
+  };
+};
+
+Result Coroutine() {
+  ...
+  co_yield (T)v;  // co_await Result.yield_value(v);
+}
 ```
 
 #### 协程体抛出异常
