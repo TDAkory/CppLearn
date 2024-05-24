@@ -37,7 +37,8 @@ private:
    int j;   // Different access control
 };```
 
-### Standard layout types
+## Standard layout types
+
 When a class or struct does not contain certain C++ language features such as virtual functions which are not found in the C language, and all members have the same access control, it is a standard-layout type. It is memcopy-able and the layout is sufficiently defined that it can be consumed by C programs. Standard-layout types can have user-defined special member functions. In addition, standard layout types have these characteristics:
 
 * no virtual functions or virtual base classes
@@ -100,6 +101,7 @@ struct Derived : public Base
 Derived would also be standard-layout if Base had the data members and Derived had only member functions.
 
 ## POD types
+
 When a class or struct is both trivial and standard-layout, it is a POD (Plain Old Data) type. The memory layout of POD types is therefore contiguous and each member has a higher address than the member that was declared before it, so that byte for byte copies and binary I/O can be performed on these types. Scalar types such as int are also POD types. POD types that are classes can have only POD types as non-static data members.
 
 Example
