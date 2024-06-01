@@ -1,6 +1,7 @@
 # [Google Mock](http://google.github.io/googletest/gmock_for_dummies.html)
 
 - [gMock Cookbook](http://google.github.io/googletest/gmock_cook_book.html)
+- [gMock for Dummiess](https://google.github.io/googletest/gmock_for_dummies.html)
 
 
 It is easy to confuse the term fake objects with mock objects. Fakes and mocks actually mean very different things in the Test-Driven Development (TDD) community:
