@@ -4,8 +4,24 @@ An interface is a contract between two parts of a program. Precisely stating wha
 
 ## I.1: Make interfaces explicit
 
+定义具有清晰明确语义的接口
+
+* A function should not make control-flow decisions based on the values of variables declared at namespace scope.
+* sA function should not write to variables declared at namespace scope.
+
+```cpp
+// 通过全局变量来控制函数行为，可能是令人困惑的
+int round(double d)
+{
+    return (round_up) ? ceil(d) : d;    // don't: "invisible" dependency
+}
+```
 
 ## I.2: Avoid non-const global variables
+
+* 初始化顺序无法保证
+* 多线程下的竞态（const变量则无需考虑这点）
+
 ## I.3: Avoid singletons
 ## I.4: Make interfaces precisely and strongly typed
 ## I.5: State preconditions (if any)

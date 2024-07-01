@@ -140,6 +140,8 @@
 
 ### C++ Topics
 
+* [C++20 Coroutines and io_uring - Part 1/3](https://pabloariasal.github.io/2022/11/12/couring-1/)
+
 ## OutPuts
 
 ### blog topics
