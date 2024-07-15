@@ -29,6 +29,7 @@
 ## 2024 
 
 > [To read](../Readings/ToBeRead.md)
+> 7-update profile 8-Prepare code 9-Prepare projects 10-try interview
 
 ### C++
 
