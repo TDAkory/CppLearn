@@ -78,3 +78,9 @@ man page中还特别指出，GNU C library中关于这个话题的一些案例�
 * Before glibc 2.24, execl(3) and execle(3) employed realloc(3) internally and were consequently not async-signal-safe.  This was fixed in glibc 2.24.
 
 * The glibc implementation of aio_suspend(3) is not async-signal-safe because it uses pthread_mutex_lock(3) internally.
+
+## `fork`存在的问题和`at_fork`
+
+## References
+
+- [pthread_atfork](https://pubs.opengroup.org/onlinepubs/009696699/functions/pthread_atfork.html)

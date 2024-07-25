@@ -11,7 +11,15 @@
 因此，C++17引入了<filesystem>库，这是C++标准中首个专门用于文件系统操作的库。与共享指针、正则表达式一样，
 filesystem也是由boost.filesystem发展来的，其最终提案是[P0218R0: Adopt the File System TS for C++17](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0317r1.html)
 
-// TODO 核心对象
+filesystem定义了一些核心类型：
+
+* `file`：文件对象持有文件的句柄，可以读写数据，包含名称、参数、状态等信息，可以是目录、普通文件、符号链接等
+* [`path`](https://en.cppreference.com/w/cpp/filesystem/path)
+  * path对象可以隐式转换为std::wstring或std::string。这意味着你可以直接将path对象传递给需要字符串的文件流函数
+  * 可以从std::string、const char*、string_view 等字符串类型初始化path对象
+  * 提供了begin()和end()成员函数，使其可以像容器一样被迭代。这允许你遍历路径中的每个组成部分
+  * 处理了不同操作系统间的路径表示差异，提供了跨平台的文件路径操作
+* [`directory_entry`](https://en.cppreference.com/w/cpp/filesystem/directory_entry)
 
 ## Refs
 
