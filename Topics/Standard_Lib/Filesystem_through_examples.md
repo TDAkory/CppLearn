@@ -1,6 +1,7 @@
 # Filesystem through examples
 
 > [Filesystem library (since C++17)](https://en.cppreference.com/w/cpp/filesystem)
+> [Filesystem source code of libstdc++](https://github.com/gcc-mirror/gcc/blob/master/libstdc%2B%2B-v3/include/std/filesystem)
 
 ## 一些基本信息
 
@@ -20,6 +21,51 @@ filesystem定义了一些核心类型：
   * 提供了begin()和end()成员函数，使其可以像容器一样被迭代。这允许你遍历路径中的每个组成部分
   * 处理了不同操作系统间的路径表示差异，提供了跨平台的文件路径操作
 * [`directory_entry`](https://en.cppreference.com/w/cpp/filesystem/directory_entry)
+
+## 操作文件夹
+
+### 创建 [create_directory](https://en.cppreference.com/w/cpp/filesystem/create_directory)
+
+```cpp
+// 会抛出异常
+bool create_directory(const path& __p);
+// 会返回错误码
+bool create_directory(const path& __p, error_code& __ec) noexcept;
+```
+
+```cpp
+#include <filesystem>
+
+{
+    // example 1
+    std::filesystem::path dir = "the_path_of_dir";
+    if (std::filesystem::create_directory(dir)) {
+        // do something
+    } else {
+        // do some other thing
+    }
+}
+
+{
+    // example 2
+    std::filesystem::path dir = "the_path_of_dir";
+    std::error_code ec{};
+    if (std::filesystem::create_directory(dir, ec)) {
+        // do something
+    } else {
+        // do some other thing, `ec.message()` returns a string
+    }
+}
+
+```
+
+## 操作文件
+
+## 操作文件路径
+
+## 检查存在性
+
+## 其他操作
 
 ## Refs
 
