@@ -22,9 +22,13 @@ filesystem定义了一些核心类型：
   * 处理了不同操作系统间的路径表示差异，提供了跨平台的文件路径操作
 * [`directory_entry`](https://en.cppreference.com/w/cpp/filesystem/directory_entry)
 
+`filesystem`在错误处理上，兼容了两种风格：即支持抛出异常，也通过函数重载支持返回错误码。
+
 ## 操作文件夹
 
 ### 创建 [create_directory](https://en.cppreference.com/w/cpp/filesystem/create_directory)
+
+`create_directory`用于创建一级文件夹，即要求其父路径必须是存在的。如果文件夹是存在的，不会报错。
 
 ```cpp
 // 会抛出异常
@@ -34,6 +38,7 @@ bool create_directory(const path& __p, error_code& __ec) noexcept;
 ```
 
 ```cpp
+// 示例
 #include <filesystem>
 
 {
@@ -59,7 +64,243 @@ bool create_directory(const path& __p, error_code& __ec) noexcept;
 
 ```
 
+其重载形式额外支持同步目标文件的权限，`existing_p`必须是一个存在的文件夹。
+
+```cpp
+bool create_directory(const std::filesystem::path& p,
+                      const std::filesystem::path& existing_p );
+
+bool create_directory(const std::filesystem::path& p,
+                      const std::filesystem::path& existing_p,
+                      std::error_code& ec ) noexcept;
+```
+
+具体什么权限被拷贝，取决于操作系统的实现。在Posix系统上，其行为类比如下：
+
+```shell
+stat(existing_p.c_str(), &attributes_stat)
+mkdir(p.c_str(), attributes_stat.st_mode)
+```
+
+此外还支持创建多级文件夹，通过接口`create_directories`：
+
+```cpp
+bool create_directories( const std::filesystem::path& p );
+
+bool create_directories( const std::filesystem::path& p, std::error_code& ec );
+```
+
+```cpp
+// 示例
+#include <filesystem>
+#include <exception>
+
+{
+    std::filesystem::path nested = "a/b/c";
+    try {
+        if (std::filesystem::create_directories(nested))
+            // do something
+        else
+            // do some other thing
+    }
+    catch (const std::exception& ex) {
+        // do exception handling
+    }
+}
+```
+
+### 删除
+
+```cpp
+bool remove( const std::filesystem::path& p );
+
+bool remove( const std::filesystem::path& p, std::error_code& ec ) noexcept;
+```
+
+删除文件或空的文件夹。可以删除符号链接，不会删除链接的目标。文件删除返回`true`、文件不存在返回`false`
+
+```cpp
+// 示例
+#include <filesystem>
+#include <exception>
+
+int main() {
+    std::filesystem::path dir = "test";
+    try {
+        if (std::filesystem::create_directory(dir))
+            // do something
+        else
+            // do some other thing
+
+        if (std::filesystem::remove(dir))
+            // do something
+        else
+            // do some other thing
+    }
+    catch (const std::exception& ex) {
+        // do exception handling
+    }
+}
+```
+
+```cpp
+std::uintmax_t remove_all( const std::filesystem::path& p );
+// LWG 3014：C++17中remove_all的error_code重载错误地标记为noexcept，但实际上可能会分配内存。因此，noexcept被移除。
+std::uintmax_t remove_all( const std::filesystem::path& p, std::error_code& ec );
+```
+
+递归删除由路径p指定的目录及其所有子目录和内容，然后删除p本身。返回删除的文件和目录的数量。
+
+如果底层操作系统API出现错误，remove和remove_all可能会抛出std::filesystem::filesystem_error。
+
+```cpp
+// 示例
+#include <filesystem>
+#include <exception>
+
+int main() {
+    std::filesystem::path dir = "test";
+    std::filesystem::path nested = dir / "a/b";
+    std::filesystem::path more = dir / "x/y";
+    try {
+        if (std::filesystem::create_directories(nested) &&
+            std::filesystem::create_directories(more))
+            // do something
+        else
+            // do some other thing
+
+        const auto cnt = std::filesystem::remove_all(dir);
+    }
+    catch (const std::exception& ex) {
+        // do exception handling
+    }
+}
+```
+
+### 遍历
+
+通过[`directory_iterator`](https://en.cppreference.com/w/cpp/filesystem/directory_iterator)可以很方便的完成文件夹的遍历，它会遍历`directory_entry`对象，但不会递归遍历子文件夹，遍历的顺序是随机的，每个`directory_entry`对象只访问一次。特殊的路径名（`.`, `..`）将被跳过。
+
+迭代器的表现和一般容器迭代的表现类似：
+
+* 当遍历结束时，迭代器会自动转换为`end()`，在`end()`上自增是未定义行为
+* 如果在创建迭代器之后，文件夹中的文件发送变化（子文件、子文件夹的创建和删除），迭代器的行为是未定义的（可能感知变化、可能不感知）
+
+```cpp
+// 示例
+#include <filesystem>
+#include <iostream>
+
+void ls() {
+    for (const auto& entry : std::filesystem::directory_iterator(".")) 
+        std::cout << entry.path() << '\n';
+}
+```
+
+上述迭代器不支持递归扫描，标准库提供了`recursive_directory_iterator`，它会递归遍历子文件夹。
+
+```cpp
+// 示例
+#include <filesystem>
+#include <iostream>
+
+void ls() {
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(".")) 
+        std::cout << entry.path() << '\n';
+}
+```
+
+### 临时文件夹
+
+`filesystem`还提供了接口来返回一个临时文件夹，用来存放临时的文件。在`Posix`文件系统上，临时文件的路径可以通过环境变量`TMPDIR`, `TMP`, `TEMP`, `TEMPDIR`设置，或返回`/tmp`。在`Windows`系统上，临时文件的路径通常是`GetTempPath`的返回值。
+
+```cpp
+path temp_directory_path();
+path temp_directory_path( std::error_code& ec );
+```
+
+```cpp
+// 示例
+#include <filesystem>
+#include <iostream>
+namespace fs = std::filesystem;
+ 
+int main()
+{
+    std::cout << "Temp directory is " << fs::temp_directory_path() << '\n';
+}
+
+// Possible Output: Temp directory is "C:\Windows\TEMP\"
+```
+
 ## 操作文件
+
+### 拷贝
+
+在拷贝的语义上，`filesystem`提供了三个主要的函数，分别是：`copy`，`copy_file`，`copy_symlink`
+
+* [std::filesystem::copy](https://en.cppreference.com/w/cpp/filesystem/copy)：拷贝文件或文件夹
+
+```cpp
+void copy(const std::filesystem::path& from,
+          const std::filesystem::path& to );
+
+void copy(const std::filesystem::path& from,
+          const std::filesystem::path& to,
+          std::filesystem::copy_options options,
+          std::error_code& ec );
+```
+
+```cpp
+// 示例
+#include <filesystem>
+
+int main() {
+    std::filesystem::path src = "source_file.txt";
+    std::filesystem::path dest = "destination_file.txt";
+    try {
+        std::filesystem::copy(src, dest);
+    } catch (std::filesystem::filesystem_error& e) {
+        // do exception handling
+    }
+}
+```
+
+如果想要递归的拷贝文件夹，则可以使用[copy_options](https://en.cppreference.com/w/cpp/filesystem/copy_options)来支持定制化拷贝执行
+
+```cpp
+#include <filesystem>
+#include <fstream>
+
+void create_temp_directories_and_files() {
+    std::filesystem::create_directories("source_directory/subdir1");
+    std::filesystem::create_directories("source_directory/subdir2");
+
+    std::ofstream("source_directory/file1.txt") << "This is file 1";
+    std::ofstream("source_directory/subdir1/file2.txt") << "This is file 2";
+    std::ofstream("source_directory/subdir2/file3.txt") << "This is file 3";
+}
+
+int main() {
+    create_temp_directories_and_files();
+
+    std::filesystem::path src = "source_directory";
+    std::filesystem::path dest = "destination_directory";
+    try {
+        std::filesystem::copy(src, dest, std::filesystem::copy_options::recursive);
+        // do something
+    } catch (std::filesystem::filesystem_error& e) {
+        // do exception handling
+    }
+
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(dest)) {
+        // do something with entry
+    }
+}
+```
+
+* [std::filesystem::copy_file](https://en.cppreference.com/w/cpp/filesystem/copy_file)：拷贝文件
+* [std::filesystem::copy_symlink](https://en.cppreference.com/w/cpp/filesystem/copy_symlink)：拷贝符号链接
 
 ## 操作文件路径
 
