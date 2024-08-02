@@ -302,9 +302,154 @@ int main() {
 * [std::filesystem::copy_file](https://en.cppreference.com/w/cpp/filesystem/copy_file)：拷贝文件
 * [std::filesystem::copy_symlink](https://en.cppreference.com/w/cpp/filesystem/copy_symlink)：拷贝符号链接
 
+### 移动和文件重命名
+
+[std::filesystem::rename](https://en.cppreference.com/w/cpp/filesystem/rename)
+
+```cpp
+// 示例
+#include <filesystem>
+#include <fstream>
+
+{
+    std::ofstream("old_file.txt") << "This is file 1";
+    std::filesystem::path old_name = "old_file.txt";
+    std::filesystem::path new_name = "new_file.txt";
+    try {
+        std::filesystem::rename(old_name, new_name);
+        // do something
+    } catch (std::filesystem::filesystem_error& e) {
+        // do exception handling
+    }
+}
+```
+
+### 创建链接
+
+[`create_hard_link`](https://en.cppreference.com/w/cpp/filesystem/create_hard_link)：创建硬链接
+
+[`create_symlink`、`create_directory_symlink`](https://en.cppreference.com/w/cpp/filesystem/create_symlink)：创建软链接
+  
+```cpp
+// 示例
+#include <filesystem>
+#include <fstream>
+#include <format>
+
+{
+    std::ofstream("target_file.txt") << "This is file 1";
+    std::filesystem::path target = "target_file.txt";
+    std::filesystem::path link = "hard_link_file.txt";
+    try {
+        std::filesystem::create_hard_link(target, link);
+        // do something
+    } catch (std::filesystem::filesystem_error& e) {
+        // do exception handling
+    }
+}
+```
+
+下面的例子可以更好的理解硬链接和软链接的区别：
+
+```cpp
+// 示例
+#include <filesystem>
+#include <iostream>
+#include <fstream>
+
+void display_file_content(const std::filesystem::path& path) {
+    if (std::filesystem::exists(path)) {
+        std::ifstream file(path);
+        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::cout << "Content of " << path << ": " << content << '\n';
+    } else {
+        std::cout << path << " does not exist.\n";
+    }
+}
+
+int main() {
+    std::filesystem::path original_file = "original_file.txt";
+    std::filesystem::path symlink = "symlink_to_file.txt";
+    std::filesystem::path hardlink = "hardlink_to_file.txt";
+
+    // Step 1: Create the original file
+    std::ofstream(original_file) << "Hello World!";
+    std::cout << "Original file created.\n";
+    display_file_content(original_file);
+
+    // Step 2: Create a symbolic link to the original file
+    try {
+        std::filesystem::create_symlink(original_file, symlink);
+        std::cout << "Symbolic link created successfully.\n";
+        display_file_content(symlink);
+    } catch (std::filesystem::filesystem_error& e) {
+        std::cout << e.what() << '\n';
+    }
+
+    // Step 3: Create a hard link to the original file
+    try {
+        std::filesystem::create_hard_link(original_file, hardlink);
+        std::cout << "Hard link created successfully.\n";
+        display_file_content(hardlink);
+    } catch (std::filesystem::filesystem_error& e) {
+        std::cout << e.what() << '\n';
+    }
+
+    // Step 4: Delete the original file and compare...
+    std::filesystem::remove(original_file);
+    std::cout << "Original file deleted.\n";
+    display_file_content(symlink);
+    display_file_content(hardlink);
+}
+```
+
 ## 操作文件路径
 
-## 检查存在性
+### 检查存在性
+
+通过[std::filesystem::exists](https://en.cppreference.com/w/cpp/filesystem/exists)检查文件和文件夹的存在性
+
+```cpp
+//
+#include <filesystem>
+
+{
+    std::filesystem::path p = "example_file.txt";
+    if (std::filesystem::exists(p))
+        // do something
+    else
+        // do some other thing
+}
+```
+
+### 判断是否是文件夹
+
+[std::filesystem::is_regular_file](https://en.cppreference.com/w/cpp/filesystem/is_regular_file)用来识别文件，[std::filesystem::is_directory](https://en.cppreference.com/w/cpp/filesystem/is_directory)用来识别文件夹
+
+```cpp
+// 示例
+#include <filesystem>
+
+{
+    std::filesystem::path p = "example_path";
+    if (std::filesystem::is_regular_file(p))
+        // do something
+    else if (std::filesystem::is_directory(p))
+        // do something
+    else
+        // do some other thing
+}
+```
+
+除了这两个接口之外，`filesystem`还提供了一些其他的工具函数，判断文件是否是链接、是否是socket等，他们的用法都是类似的。
+
+### 读取链接文件的状态
+
+[std::filesystem::read_symlink](https://en.cppreference.com/w/cpp/filesystem/read_symlink)
+
+```cpp
+std::filesystem::path read_symlink( const std::filesystem::path& p );
+```
 
 ## 其他操作
 
