@@ -5,20 +5,20 @@
 
 ## 一些基本信息
 
-在C++ 17之前，C++/C提供了两种文件操作的机制。一种是C++标准库定义的文件流fstream，另一种是C标准库定义的文件操作类型FILE。fstream 更好地集成了C++的特性，如异常处理和类型安全，适合需要C++特性的项目，而 FILE 更适合底层或性能敏感的应用，以及需要与C代码兼容的场景。
+在`C++17`之前，`C++/C`提供了两种文件操作的机制。一种是`C++`标准库定义的文件流`fstream`，另一种是`C`标准库定义的文件操作类型`FILE`。`fstream` 更好地集成了`C++`的特性，如异常处理和类型安全，适合需要`C++`特性的项目，而 `FILE` 更适合底层或性能敏感的应用，以及需要与C代码兼容的场景。
 
-尽管fstream提供了针对文件的操作流，但其仍然存在一些问题。比如与C语言的 FILE* 流相比，fstream 可能在某些情况下性能较低，尤其是在需要大量I/O操作的场景中；fstream无法完全屏蔽不同操作系统在文件和路径表示上的差异（分隔符、长度和字符集限制、权限模型、结束符等）
+尽管`fstream`提供了针对文件的操作流，但其仍然存在一些问题。比如与`C`语言的 `FILE*` 流相比，`fstream` 可能在某些情况下性能较低，尤其是在需要大量`I/O`操作的场景中；`fstream`无法完全屏蔽不同操作系统在文件和路径表示上的差异（分隔符、长度和字符集限制、权限模型、结束符等）
 
-因此，C++17引入了<filesystem>库，这是C++标准中首个专门用于文件系统操作的库。与共享指针、正则表达式一样，
-filesystem也是由boost.filesystem发展来的，其最终提案是[P0218R0: Adopt the File System TS for C++17](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0317r1.html)
+因此，`C++17`引入了`<filesystem>`库，这是`C++`标准中首个专门用于文件系统操作的库。与共享指针、正则表达式一样，
+`filesystem`也是由`boost.filesystem`发展来的，其最终提案是[P0218R0: Adopt the File System TS for C++17](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0317r1.html)
 
-filesystem定义了一些核心类型：
+`filesystem`定义了一些核心类型：
 
 * `file`：文件对象持有文件的句柄，可以读写数据，包含名称、参数、状态等信息，可以是目录、普通文件、符号链接等
 * [`path`](https://en.cppreference.com/w/cpp/filesystem/path)
-  * path对象可以隐式转换为std::wstring或std::string。这意味着你可以直接将path对象传递给需要字符串的文件流函数
-  * 可以从std::string、const char*、string_view 等字符串类型初始化path对象
-  * 提供了begin()和end()成员函数，使其可以像容器一样被迭代。这允许你遍历路径中的每个组成部分
+  * `path`对象可以隐式转换为`std::wstring`或`std::string`。这意味着你可以直接将`path`对象传递给需要字符串的文件流函数
+  * 可以从`std::string`、`const char*`、`string_view` 等字符串类型初始化`path`对象
+  * 提供了`begin()`和`end()`成员函数，使其可以像容器一样被迭代。这允许你遍历路径中的每个组成部分
   * 处理了不同操作系统间的路径表示差异，提供了跨平台的文件路径操作
 * [`directory_entry`](https://en.cppreference.com/w/cpp/filesystem/directory_entry)
 
@@ -26,7 +26,7 @@ filesystem定义了一些核心类型：
 
 ## 操作文件夹
 
-### 创建 [create_directory](https://en.cppreference.com/w/cpp/filesystem/create_directory)
+### 创建[`create_directory`](https://en.cppreference.com/w/cpp/filesystem/create_directory)
 
 `create_directory`用于创建一级文件夹，即要求其父路径必须是存在的。如果文件夹是存在的，不会报错。
 
@@ -75,7 +75,7 @@ bool create_directory(const std::filesystem::path& p,
                       std::error_code& ec ) noexcept;
 ```
 
-具体什么权限被拷贝，取决于操作系统的实现。在Posix系统上，其行为类比如下：
+具体什么权限被拷贝，取决于操作系统的实现。在`POSIX`系统上，其行为类比如下：
 
 ```shell
 stat(existing_p.c_str(), &attributes_stat)
@@ -149,9 +149,9 @@ std::uintmax_t remove_all( const std::filesystem::path& p );
 std::uintmax_t remove_all( const std::filesystem::path& p, std::error_code& ec );
 ```
 
-递归删除由路径p指定的目录及其所有子目录和内容，然后删除p本身。返回删除的文件和目录的数量。
+递归删除由路径`p`指定的目录及其所有子目录和内容，然后删除`p`本身。返回删除的文件和目录的数量。
 
-如果底层操作系统API出现错误，remove和remove_all可能会抛出std::filesystem::filesystem_error。
+如果底层操作系统API出现错误，`remove`和`remove_all`可能会抛出`std::filesystem::filesystem_error`。
 
 ```cpp
 // 示例
@@ -212,7 +212,7 @@ void ls() {
 
 ### 临时文件夹
 
-`filesystem`还提供了接口来返回一个临时文件夹，用来存放临时的文件。在`Posix`文件系统上，临时文件的路径可以通过环境变量`TMPDIR`, `TMP`, `TEMP`, `TEMPDIR`设置，或返回`/tmp`。在`Windows`系统上，临时文件的路径通常是`GetTempPath`的返回值。
+`filesystem`还提供了接口来返回一个临时文件夹，用来存放临时的文件。在`POSIX`文件系统上，临时文件的路径可以通过环境变量`TMPDIR`, `TMP`, `TEMP`, `TEMPDIR`设置，或返回`/tmp`。在`Windows`系统上，临时文件的路径通常是`GetTempPath`的返回值。
 
 ```cpp
 path temp_directory_path();
@@ -239,7 +239,7 @@ int main()
 
 在拷贝的语义上，`filesystem`提供了三个主要的函数，分别是：`copy`，`copy_file`，`copy_symlink`
 
-* [std::filesystem::copy](https://en.cppreference.com/w/cpp/filesystem/copy)：拷贝文件或文件夹
+* [`std::filesystem::copy`](https://en.cppreference.com/w/cpp/filesystem/copy)：拷贝文件或文件夹
 
 ```cpp
 void copy(const std::filesystem::path& from,
@@ -266,7 +266,7 @@ int main() {
 }
 ```
 
-如果想要递归的拷贝文件夹，则可以使用[copy_options](https://en.cppreference.com/w/cpp/filesystem/copy_options)来支持定制化拷贝执行
+如果想要递归的拷贝文件夹，则可以使用[`copy_options`](https://en.cppreference.com/w/cpp/filesystem/copy_options)来支持定制化拷贝执行
 
 ```cpp
 #include <filesystem>
@@ -299,12 +299,12 @@ int main() {
 }
 ```
 
-* [std::filesystem::copy_file](https://en.cppreference.com/w/cpp/filesystem/copy_file)：拷贝文件
-* [std::filesystem::copy_symlink](https://en.cppreference.com/w/cpp/filesystem/copy_symlink)：拷贝符号链接
+* [`std::filesystem::copy_file`](https://en.cppreference.com/w/cpp/filesystem/copy_file)：拷贝文件
+* [`std::filesystem::copy_symlink`](https://en.cppreference.com/w/cpp/filesystem/copy_symlink)：拷贝符号链接
 
 ### 移动和文件重命名
 
-[std::filesystem::rename](https://en.cppreference.com/w/cpp/filesystem/rename)
+[`std::filesystem::rename`](https://en.cppreference.com/w/cpp/filesystem/rename)
 
 ```cpp
 // 示例
@@ -407,7 +407,7 @@ int main() {
 
 ### 检查存在性
 
-通过[std::filesystem::exists](https://en.cppreference.com/w/cpp/filesystem/exists)检查文件和文件夹的存在性
+通过[`std::filesystem::exists`](https://en.cppreference.com/w/cpp/filesystem/exists)检查文件和文件夹的存在性
 
 ```cpp
 //
@@ -424,7 +424,7 @@ int main() {
 
 ### 判断是否是文件夹
 
-[std::filesystem::is_regular_file](https://en.cppreference.com/w/cpp/filesystem/is_regular_file)用来识别文件，[std::filesystem::is_directory](https://en.cppreference.com/w/cpp/filesystem/is_directory)用来识别文件夹
+[`std::filesystem::is_regular_file`](https://en.cppreference.com/w/cpp/filesystem/is_regular_file)用来识别文件，[`std::filesystem::is_directory`](https://en.cppreference.com/w/cpp/filesystem/is_directory)用来识别文件夹
 
 ```cpp
 // 示例
@@ -441,17 +441,208 @@ int main() {
 }
 ```
 
-除了这两个接口之外，`filesystem`还提供了一些其他的工具函数，判断文件是否是链接、是否是socket等，他们的用法都是类似的。
+除了这两个接口之外，`filesystem`还提供了一些其他的工具函数，判断文件是否是链接、是否是`socket`等，他们的用法都是类似的。
 
-### 读取链接文件的状态
+### 读取链接文件的指向
 
-[std::filesystem::read_symlink](https://en.cppreference.com/w/cpp/filesystem/read_symlink)
+[`std::filesystem::read_symlink`](https://en.cppreference.com/w/cpp/filesystem/read_symlink)
 
 ```cpp
 std::filesystem::path read_symlink( const std::filesystem::path& p );
 ```
 
+```cpp
+// 示例
+#include <filesystem>
+#include <iostream>
+#include <fstream>
+
+int main() {
+    std::filesystem::path original_file = "original_file.txt";
+    std::filesystem::path symlink = "symlink_to_file.txt";
+
+    std::ofstream(original_file) << "Hello World!";
+
+    try {
+        std::filesystem::create_symlink(original_file, symlink);
+        
+    } catch (std::filesystem::filesystem_error& e) {
+        // do exception handling
+    }
+
+    if (std::filesystem::is_symlink(symlink)) {
+        std::cout << symlink << " is a symbolic link.\n";
+        std::filesystem::path target = std::filesystem::read_symlink(symlink);
+        std::cout << "It points to: " << target << '\n';
+    } else {
+        // do some other thing
+    }
+}
+```
+
+### 获取绝对路径和相对路径
+
+[`std::filesystem::absolute`](https://en.cppreference.com/w/cpp/filesystem/absolute)
+
+[`std::filesystem::relative`](https://en.cppreference.com/w/cpp/filesystem/relative)
+
+```cpp
+// 示例
+#include <filesystem>
+#include <iostream>
+
+int main() {
+    {
+        // Example relative paths
+        std::filesystem::path relative_path1 = "example_directory";
+        std::filesystem::path relative_path2 = "../parent_directory";
+    
+        // Convert to absolute paths
+        std::filesystem::path absolute_path1 = std::filesystem::absolute(relative_path1);
+        std::filesystem::path absolute_path2 = std::filesystem::absolute(relative_path2);
+
+        // Display the absolute paths
+        std::cout << "Relative path: " << relative_path1 << " -> Absolute path: " << absolute_path1 << '\n';
+        std::cout << "Relative path: " << relative_path2 << " -> Absolute path: " << absolute_path2 << '\n';
+    }
+
+    {
+        std::filesystem::path base_path = "/home/user";
+        std::filesystem::path absolute_path = "/home/user/example_directory/file.txt";
+        std::filesystem::path relative_path = std::filesystem::relative(absolute_path, base_path);
+        std::cout << "Relative path: " << relative_path << '\n';
+    }
+}
+```
+
+### 显式路径时去掉引号
+
+在针对`std::filesystem::path`进行[`operator<<`, `operator>>`](https://en.cppreference.com/w/cpp/filesystem/path/operator_ltltgtgt)进行重载时，为了保证路径中存在的空格不会导致字符串截断，会自动使用`std::quoted`来保护路径。
+
+> Performs stream input or output on the path p. std::quoted is used so that spaces do not cause truncation when later read by stream input operator.
+
+如果想要去除引号，可以通过[`std::filesystem::path::c_str`](https://en.cppreference.com/w/cpp/filesystem/path/native)获取路径的原生表示。
+
+```cpp
+// 示例
+for (const auto& entry : std::filesystem::directory_iterator(".")) 
+        std::cout << entry.path().c_str() << '\n';
+```
+
 ## 其他操作
+
+### 统计大小
+
+[`std::filesystem::file_size`](https://en.cppreference.com/w/cpp/filesystem/file_size)可以用来返回一个文件或符号链接的大小，在POSIX文件系统上，它实际上是读取stat结构的st_size字段。如果想要通过这个接口获取一个文件夹的大小，其行为是由实现定义的（implementation-defined）
+
+[`std::filesystem::space`](https://en.cppreference.com/w/cpp/filesystem/space)用来统计路径下的可用空间，类似POSIX文件系统上的statvfs。它会返回一个
+[`filesystem::space_info`](https://en.cppreference.com/w/cpp/filesystem/space_info)的对象，包含所指向路径的容量、可用等信息。
+
+```cpp
+// 示例
+#include <filesystem>
+#include <iostream>
+#include <fstream>
+
+// Function to create a test directory with some files and subdirectories
+void create_test_directory(const std::filesystem::path& dir) {
+    std::filesystem::create_directories(dir / "subdir1");
+    std::filesystem::create_directories(dir / "subdir2");
+
+    std::ofstream(dir / "file1.txt") << "ABC";
+    std::ofstream(dir / "subdir1/file2.txt") << "XYZ";
+    std::ofstream(dir / "subdir2/file3.txt") << "123";
+}
+
+// Function to calculate the total size of a directory
+std::uintmax_t calculate_directory_size(const std::filesystem::path& dir) {
+    std::uintmax_t size = 0;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(dir)) {
+        if (std::filesystem::is_regular_file(entry.path())) {
+            size += std::filesystem::file_size(entry.path());
+        }
+    }
+    return size;
+}
+
+int main() {
+    {
+        // Create a test directory with some files and subdirectories
+        std::filesystem::path test_dir = "test_directory";
+        create_test_directory(test_dir);
+        std::cout << "Test directory created.\n";
+
+        // Calculate the total size of the test directory
+        std::uintmax_t total_size = calculate_directory_size(test_dir);
+        std::cout << "Total size of directory " << test_dir << ": " << total_size << " bytes\n";
+
+        // Clean up by removing the test directory and its contents
+        std::filesystem::remove_all(test_dir);
+        std::cout << "Test directory removed.\n";
+    }
+
+    {
+        std::filesystem::path p = "/";
+        auto space_info = std::filesystem::space(p);
+        std::cout << "Free space: " << space_info.free << " bytes\n";
+        std::cout << "Available space: " << space_info.available << " bytes\n";
+        std::cout << "Capacity: " << space_info.capacity << " bytes\n";
+    }
+}
+```
+
+### 权限操作
+
+[`std::filesystem::perms`](https://en.cppreference.com/w/cpp/filesystem/perms)定义了文件权限
+
+[`std::filesystem::file_status::permissions`](https://en.cppreference.com/w/cpp/filesystem/file_status/permissions)用来获取文件的权限
+
+[`std::filesystem::permissions`](https://en.cppreference.com/w/cpp/filesystem/permissions)用来设置文件权限
+
+```cpp
+// 示例
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+ 
+void demo_perms(std::filesystem::perms p)
+{
+    using std::filesystem::perms;
+    auto show = [=](char op, perms perm)
+    {
+        std::cout << (perms::none == (perm & p) ? '-' : op);
+    };
+    show('r', perms::owner_read);
+    show('w', perms::owner_write);
+    show('x', perms::owner_exec);
+    show('r', perms::group_read);
+    show('w', perms::group_write);
+    show('x', perms::group_exec);
+    show('r', perms::others_read);
+    show('w', perms::others_write);
+    show('x', perms::others_exec);
+    std::cout << '\n';
+}
+ 
+int main()
+{
+    std::ofstream("test.txt"); // create file
+ 
+    std::cout << "Created file with permissions: ";
+    demo_perms(std::filesystem::status("test.txt").permissions());
+ 
+    std::filesystem::permissions(
+        "test.txt",
+        std::filesystem::perms::owner_all | std::filesystem::perms::group_all,
+        std::filesystem::perm_options::add
+    );
+ 
+    std::cout << "After adding u+rwx and g+rwx:  ";
+    demo_perms(std::filesystem::status("test.txt").permissions());
+ 
+    std::filesystem::remove("test.txt");
+}
+```
 
 ## Refs
 
