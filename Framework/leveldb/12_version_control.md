@@ -1,5 +1,11 @@
 # Version Control
 
+- [Version Control](#version-control)
+  - [VersionSet \& Version](#versionset--version)
+  - [manifest文件格式](#manifest文件格式)
+  - [Version 接口](#version-接口)
+
+
 **版本（Version）**:
 
 - 每个版本代表了一个数据库状态的快照，包括当前磁盘和内存中的所有文件信息。
@@ -175,3 +181,16 @@ void VersionEdit::EncodeTo(std::string* dst) const {
 ```
 
 ## Version 接口
+
+```c
+  // Append to *iters a sequence of iterators that will
+  // yield the contents of this Version when merged together.
+  // REQUIRES: This version has been saved (see VersionSet::SaveTo)
+  void AddIterators(const ReadOptions&, std::vector<Iterator*>* iters);
+
+  // Lookup the value for key.  If found, store it in *val and
+  // return OK.  Else return a non-OK status.  Fills *stats.
+  // REQUIRES: lock is not held
+  Status Get(const ReadOptions&, const LookupKey& key, std::string* val,
+             GetStats* stats);
+```
