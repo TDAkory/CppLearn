@@ -343,3 +343,42 @@ void AssertHelper::operator=(const Message& message) const {
   );  // NOLINT
 }
 ```
+
+`AddTestPartResult` 的核心动作可以分为三部分：构造错误消息（会根据入参来决定是否加入stack trace）、构造测试的部分结果并Report、根据测试的`TestPartResult::Type`进行一些错误处理
+
+```cpp
+// Adds a TestPartResult to the current TestResult object.  All Google Test
+// assertion macros (e.g. ASSERT_TRUE, EXPECT_EQ, etc) eventually call
+// this to report their results.  The user code should use the
+// assertion macros instead of calling this directly.
+void UnitTest::AddTestPartResult(TestPartResult::Type result_type,
+                                 const char* file_name, int line_number,
+                                 const std::string& message,
+                                 const std::string& os_stack_trace)
+    GTEST_LOCK_EXCLUDED_(mutex_) {
+  Message msg;
+  msg << message;
+
+  ... // some operations to construct msg
+
+  const TestPartResult result = TestPartResult(
+      result_type, file_name, line_number, msg.GetString().c_str());
+  impl_->GetTestPartResultReporterForCurrentThread()->ReportTestPartResult(
+      result);
+
+  ... // some error handling based on `result_type`
+}
+
+void DefaultPerThreadTestPartResultReporter::ReportTestPartResult(const TestPartResult& result) {
+  unit_test_->GetGlobalTestPartResultReporter()->ReportTestPartResult(result);
+}
+
+void DefaultGlobalTestPartResultReporter::ReportTestPartResult(const TestPartResult& result) {
+  unit_test_->current_test_result()->AddTestPartResult(result);
+  unit_test_->listeners()->repeater()->OnTestPartResult(result);
+}
+
+void TestResult::AddTestPartResult(const TestPartResult& test_part_result) {
+  test_part_results_.push_back(test_part_result);
+}
+```
