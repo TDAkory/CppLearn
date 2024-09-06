@@ -19,3 +19,5 @@ static void clobber() {
 ```
 
 See[extend asm](../../Compile_Link/compile/gcc/extend_asm.md)
+
+- [使用 Perf 和火焰图分析 CPU 性能](https://senlinzhan.github.io/2018/03/18/perf/?from=from_parent_mindnote)
