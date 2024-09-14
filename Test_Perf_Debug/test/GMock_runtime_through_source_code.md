@@ -166,6 +166,18 @@ GMOCK_PP_IDENTITY(GMOCK_INTERNAL_MOCK_METHOD_ARG_4(std::string, getArbitraryStri
 2. 校验函数的标识符是否在括号内
 3. 校验函数签名是否符合规范
 4. 校验函数的标识符是否符合规范
+5. 最终通过 `GMOCK_INTERNAL_MOCK_METHOD_IMPL` 来完成mock函数的注册。
+
+在解析`GMOCK_INTERNAL_MOCK_METHOD_IMPL`之前，我们先来看看`GMOCK_INTERNAL_MOCK_METHOD_IMPL`的几个入参分别是什么
+
+1. `GMOCK_PP_NARG0 _Args` 的目的是解析mock函数的入参个数，注意这里并不是`MOCK_METHOD`宏的入参，而是我们被Mock的函数的真实入参，无参数会被标记为0，最多仍是支持15个参数，因为其内部使用的解析宏和前面解析宏参数的宏是一样的，都是`GMOCK_PP_NARG`，我们在上面已经分析过了。
+2. `_MethodName` 就是被mock函数的函数名
+3. 接下来是一组类似的宏，用来解析函数的标识符，我们分析其中一个`GMOCK_INTERNAL_HAS_OVERRIDE(_Spec)`，假设此时的 `_Spec = (const, override)`
+   ```cpp
+   #define GMOCK_INTERNAL_HAS_OVERRIDE(_Tuple) \
+    GMOCK_PP_HAS_COMMA(                       \
+      GMOCK_PP_FOR_EACH(GMOCK_INTERNAL_DETECT_OVERRIDE, ~, _Tuple))
+   ```
 
 ```cpp
 #define GMOCK_INTERNAL_MOCK_METHOD_IMPL(_N, _MethodName, _Constness,           \
