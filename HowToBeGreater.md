@@ -7,6 +7,7 @@
   - [2024](#2024)
     - [C++](#c)
     - [Rust](#rust)
+    - [Golang](#golang)
     - [Background 高性能编程](#background-高性能编程)
     - [语言](#语言)
     - [体质](#体质)
@@ -50,6 +51,11 @@
 * leveldb-rs
 * 语言特性深入理解
 
+### Golang
+
+* 复习 Basic concept
+* go in deep
+
 ### Background 高性能编程
 
 * kernel code unix
@@ -83,10 +89,10 @@
 * 理解proc文件系统
 * 理解unix domain socket
 * unix定时器的支持
-* why c++ has argument dependent lookup?
+* <font color=green>[Done]</font> why c++ has argument dependent lookup?
 * a simple coroutine framework
 * 从源码理解select poll epoll
-* 深入理解flock以及一些用法
+* <font color=green>[Done]</font> 深入理解flock以及一些用法
 * 什么事伪共享 & 为什么有性能损耗
 * <font color=green>[Done]</font> 理解numa的概念
 * <font color=green>[Done]</font> glibc如何完成系统调用
