@@ -30,7 +30,7 @@
 ## 2024 
 
 > [To read](../Readings/ToBeRead.md)
-> 在WAL +共识 & 数据结构编码[内存&落盘] & 查询加速 & 二级索引+sorting key 等方向 选择一个 持续学习投入
+> 在WAL + 共识 & 数据结构编码[内存&落盘] & 查询加速 & 二级索引+sorting key 等方向 选择一个 持续学习投入
 > 11、12 try some interview
 
 ### C++

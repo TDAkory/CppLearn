@@ -79,9 +79,9 @@
 
 提案定义了两类主要的接口：`Promise` `Awaitable`
 
-- `Promise`接口定义了定制协程自身行为的方法：库作者可以定制coroutine在 `called`、`return`、`co_await`、`co_yield` 时的行为
+- `Promise`接口定义了定制协程自身行为的方法：库作者可以定制coroutine在 `called`、`return`时的行为，以及协程内`co_await`、`co_yield`表达式的行为（指`await_transform`接口）
 
-`Awaitable`接口定义了控制`co_await`语义的方法：当一个变量是 `co_await`ed，那么编译器会生成一系列可指定的针对 `awaitable` 变量的方法，这些方法包括：是否挂起协程、在挂起后执行某些逻辑、在恢复时执行某些逻辑来处理`co_await`的返回值。
+- `Awaitable`接口定义了控制`co_await`语义的方法：当一个变量是 `co_await`ed，那么编译器会生成一系列可指定的针对 `awaitable` 变量的方法，这些方法包括：是否挂起当前协程、在挂起后执行某些逻辑、在恢复时执行某些逻辑来处理`co_await`的返回值。
 
 ### Explain in cppreference
 
@@ -155,7 +155,7 @@ struct suspend_always {
 
 #### 协程的返回值
 
-在 C++ 当中，一个函数的返回值类型如果是符合协程的规则的类型，那么这个函数就是一个协程。
+**在 C++ 当中，一个函数的返回值类型如果是符合协程的规则的类型，那么这个函数就是一个协程。**
 
 这个协程的规则，就是返回值类型能够实例化如下模板。也就是说，返回值类型 _Ret 能够找到一个类型 _Ret::promise_type 与之相匹配。这个 promise_type 既可以是直接定义在 _Ret 当中的类型，也可以通过 using 指向已经存在的其他外部类型。
 
@@ -393,7 +393,7 @@ namespace std::experimental
 
 ## Synchronisation-free async code
 
-co_await 运算符的一个强有力的设计特性，就是允许再协程被挂起和恢复之间，执行其他逻辑
+co_await 运算符的一个强有力的设计特性，就是允许在协程被挂起和恢复之间，执行其他逻辑
 
 ```shell
 Time     Thread 1                           Thread 2
@@ -592,7 +592,7 @@ bool async_manual_reset_event::awaiter::await_suspend(
 
 The `Promise` object defines and controls the behaviour of the coroutine itself by implementing methods that are called at specific points during execution of the coroutine.
 
-当我们书写一个协程方法时，其方法内包含协程的关键字，name这个函数会被编译器转换为以下的形式。
+当我们书写一个协程方法时，其方法内包含协程的关键字，那么这个函数会被编译器转换为以下的形式。
 
 相比于普通的方法，协程方法在真正执行之前，会有一些特定步骤被调用
 
@@ -799,7 +799,7 @@ Note that while it is allowed to have a coroutine not suspend at the final_suspe
 
 ### How the compiler chooses the promise type
 
-- 编译器选择promise类型的方式是根据协程签名来进行类型萃取，std::experimental::coroutine_traits
+**编译器选择promise类型的方式是根据协程签名来进行类型萃取，std::experimental::coroutine_traits**
 
 如果有一个协程的函数签名如下
 
@@ -919,7 +919,7 @@ namespace std::experimental
 
 ### 自定义 co_yield 的行为
 
-If the co_yield keyword appears in a coroutine then the compiler translates the expression co_yield <expr> into the expression co_await promise.yield_value(<expr>). 
+If the co_yield keyword appears in a coroutine then the compiler translates the expression `co_yield <expr>` into the expression `co_await promise.yield_value(<expr>)`. 
 
 ## Understanding Symmetric Transfer
 
