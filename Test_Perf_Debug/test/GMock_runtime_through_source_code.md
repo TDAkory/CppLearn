@@ -179,6 +179,45 @@ GMOCK_PP_IDENTITY(GMOCK_INTERNAL_MOCK_METHOD_ARG_4(std::string, getArbitraryStri
       GMOCK_PP_FOR_EACH(GMOCK_INTERNAL_DETECT_OVERRIDE, ~, _Tuple))
    ```
 
+   我们从外向内逐步展开这个宏，看看这里是如何进行的判断
+
+   ```c
+   GMOCK_PP_HAS_COMMA(GMOCK_PP_FOR_EACH(GMOCK_INTERNAL_DETECT_OVERRIDE, ~, (const, override)))
+   ```
+
+   ```c
+   GMOCK_PP_INTERNAL_16TH((GMOCK_PP_FOR_EACH(GMOCK_INTERNAL_DETECT_OVERRIDE, ~, (const, override)), 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0))
+   ```
+
+   ```c
+   GMOCK_PP_INTERNAL_16TH((GMOCK_PP_CAT(GMOCK_PP_INTERNAL_FOR_EACH_IMPL_, GMOCK_PP_NARG0 (const, override))(0, GMOCK_INTERNAL_DETECT_OVERRIDE, ~, (const, override)), 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0))
+   ```
+
+   这里`GMOCK_PP_NARG0`计算了标识符的个数，得到2，然后`GMOCK_PP_CAT`完成了字符串的拼接，因此得到了
+
+   ```c
+   GMOCK_PP_INTERNAL_16TH(GMOCK_PP_INTERNAL_FOR_EACH_IMPL_2(0, GMOCK_INTERNAL_DETECT_OVERRIDE, ~, (const, override)),1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0)
+   ```
+
+   中间的FOR_EACH部分，会把标识符展开为两个表达式
+
+   ```c
+   GMOCK_INTERNAL_DETECT_OVERRIDE(0, ~, const)
+   GMOCK_INTERNAL_DETECT_OVERRIDE(1, ~, override)
+   ```
+
+   两者分别对应着`GMOCK_INTERNAL_DETECT_OVERRIDE_const`, `,`
+
+   ```c
+   // Returns 1 if the expansion of arguments has an unprotected comma. Otherwise
+   // returns 0. Requires no more than 15 unprotected commas.
+   GMOCK_PP_INTERNAL_16TH(GMOCK_INTERNAL_DETECT_OVERRIDE_const, , ,1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0)
+   ```
+
+   **简单来说，这一组宏展开通过将要检测的目标对象转换为参数列表中的`,`，又由于宏展开时，逗号会作为宏参数的分隔符。因此多一个逗号意味着参数个数增加了两个。最终通过检测变换后的参数列表中，是否存在‘未受到保护的逗号’，来判断是否命中了检测目标。**
+
+然后我们看下`GMOCK_INTERNAL_MOCK_METHOD_IMPL`的展开，看起来显得比较复杂：
+
 ```cpp
 #define GMOCK_INTERNAL_MOCK_METHOD_IMPL(_N, _MethodName, _Constness,           \
                                         _Override, _Final, _NoexceptSpec,      \
@@ -213,4 +252,47 @@ GMOCK_PP_IDENTITY(GMOCK_INTERNAL_MOCK_METHOD_ARG_4(std::string, getArbitraryStri
   }                                                                            \
   mutable ::testing::FunctionMocker<GMOCK_PP_REMOVE_PARENS(_Signature)>        \
   GMOCK_MOCKER_(_N, _Constness, _MethodName)
+
+  #define GMOCK_MOCKER_(arity, constness, Method) \
+  GTEST_CONCAT_TOKEN_(gmock##constness##arity##_##Method##_, __LINE__)
 ```
+
+第一部分：生成了一个和原函数的函数名相同的函数，用来替换生产代码的真实逻辑。函数内会调用mocker的`SetOwnerAndName`把Mock类指针和函数名注册进去，然后Invoke方法是为了后续调用用户指定的EXPECT_CALL中的逻辑的
+第二部分：生成了两个 gmock_原函数名 的新函数。这个函数返回了一个参数筛选的函数对象，会被EXPECT_CALL调用，用来记录用户设置的期望行为
+第三部分：生成了一个唯一的变量名：gmock + 是否const + 参数个数 + 方法名 + 行号
+
+这里用到了一个类型 `::testing::FunctionMocker`，这是一个模板类。其中R是被Mock函数的返回值，Args是参数列表。在模板类的开头就定义了被Mock的函数原型。
+
+在Invoke方法中，会寻找特定参数下，能够匹配到的Action，然后执行。
+
+```cpp
+// googlemock/include/gmock/gmock-spec-builders.h
+template <typename R, typename... Args>
+class FunctionMocker<R(Args...)> final : public UntypedFunctionMockerBase {
+  using F = R(Args...);
+
+ public:
+  using Result = R;
+  using ArgumentTuple = std::tuple<Args...>;
+  using ArgumentMatcherTuple = std::tuple<Matcher<Args>...>;
+
+  ...
+
+  // Returns the result of invoking this mock function with the given
+  // arguments.  This function can be safely called from multiple
+  // threads concurrently.
+  Result Invoke(Args... args) GTEST_LOCK_EXCLUDED_(g_gmock_mutex) {
+    return InvokeWith(ArgumentTuple(std::forward<Args>(args)...));
+  }
+
+  MockSpec<F> With(Matcher<Args>... m) {
+    return MockSpec<F>(this, ::std::make_tuple(std::move(m)...));
+  }
+
+ ...
+};  // class FunctionMocker
+```
+
+那么显而易见的问题就是，这些候选的Action是如何被注册进来的。这就涉及到`EXPECT_CALL`的逻辑了。
+
+## `EXPECT_CALL`做了什么
