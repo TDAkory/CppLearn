@@ -296,3 +296,153 @@ class FunctionMocker<R(Args...)> final : public UntypedFunctionMockerBase {
 那么显而易见的问题就是，这些候选的Action是如何被注册进来的。这就涉及到`EXPECT_CALL`的逻辑了。
 
 ## `EXPECT_CALL`做了什么
+
+```cpp
+//googlemock/include/gmock/gmock-spec-builders.h
+#define EXPECT_CALL(obj, call) \
+  GMOCK_ON_CALL_IMPL_(obj, InternalExpectedAt, call)
+
+#define GMOCK_ON_CALL_IMPL_(mock_expr, Setter, call)                    \
+  ((mock_expr).gmock_##call)(::testing::internal::GetWithoutMatchers(), \
+                             nullptr)                                   \
+      .Setter(__FILE__, __LINE__, #mock_expr, #call)
+```
+
+按照文章开头的例子，进行展开，可以得到
+
+```cpp
+  MockFoo mock_foo;
+  EXPECT_CALL(mock_foo, getArbitraryString());
+
+  mock_foo.gmock_getArbitraryString(...).InternalExpectedAt(__FILE__, __LINE__, mock_foo, getArbitraryString);
+```
+
+根据前面的分析，`mock_foo.gmock_getArbitraryString(...)`会返回`MOCK_METHOD`展开后实例化的`MockSpec`对象
+
+`MockSpec`类模板定义如下，其`InternalExpectedAt`方法则返回了一个`internal::TypedExpectation<F>&`，在这个spec内部，会记录文件名、行号、matcher等信息。
+
+```cpp
+//googlemock/include/gmock/gmock-spec-builders.h
+template <typename F>
+class MockSpec {
+  ...
+  // Adds a new expectation spec to the function mocker and returns
+  // the newly created spec.
+  internal::TypedExpectation<F>& InternalExpectedAt(const char* file, int line,
+                                                    const char* obj,
+                                                    const char* call) {
+    const std::string source_text(std::string("EXPECT_CALL(") + obj + ", " +
+                                  call + ")");
+    LogWithLocation(internal::kInfo, file, line, source_text + " invoked");
+    return function_mocker_->AddNewExpectation(file, line, source_text,
+                                               matchers_);
+  }
+  ...
+}
+```
+
+`EXPECT_CALL(...).WillRepeatedly(Invoke(some_method))`，表达式继续执行，后续的`WillRepeatedly`会操作返回的`internal::TypedExpectation<F>&`，记录需要执行的action，以及标记这个action是可以重复执行的。
+
+```cpp
+// Implements an expectation for the given function type.
+template <typename R, typename... Args>
+class TypedExpectation<R(Args...)> : public ExpectationBase {
+  ...
+  // Implements the .WillRepeatedly() clause.
+  TypedExpectation& WillRepeatedly(const Action<F>& action) {
+    if (last_clause_ == kWillRepeatedly) {
+      ExpectSpecProperty(false,
+                         ".WillRepeatedly() cannot appear "
+                         "more than once in an EXPECT_CALL().");
+    } else {
+      ExpectSpecProperty(last_clause_ < kWillRepeatedly,
+                         ".WillRepeatedly() cannot appear "
+                         "after .RetiresOnSaturation().");
+    }
+    last_clause_ = kWillRepeatedly;
+    repeated_action_specified_ = true;
+
+    repeated_action_ = action;
+    if (!cardinality_specified()) {
+      set_cardinality(AtLeast(static_cast<int>(untyped_actions_.size())));
+    }
+
+    // Now that no more action clauses can be specified, we check
+    // whether their count makes sense.
+    CheckActionCountIfNotDone();
+    return *this;
+  }
+  ...
+}
+```
+
+## 整体流程
+
+我们的例子会展开成如下的形式
+
+```cpp
+// 假设MOCK_METHOD的行数是第五行
+class MockFoo : public Foo {
+  public:
+    std::string getArbitraryString(int gmock_a1) {
+      gmock_1_getArbitraryString_5.SetOwnerAndName(this, getArbitraryString);
+      return gmock_1_getArbitraryString_5.Invoke(::std::forward<int>(gmock_a1));
+    }
+
+    ::testing::MockSpec<std::string> gmock_getArbitraryString(int gmock_a1) {
+      gmock_1_getArbitraryString_5.RegisterOwner(this);
+      return gmock_1_getArbitraryString_5.With(gmock_a1);
+    }
+
+    ::testing::MockSpec<std::string> gmock_getArbitraryString(const ::testing::internal::WithouMatchers&, ::testing::internal::Function<std::string> *) const {
+      return ::testing::internal::AdjustConstness_(*this).gmock_getArbitraryString(...);
+    }
+
+    mutable ::testing::FunctionMacker<__VA_ARGS__> gmock_1_getArbitraryString_5;
+};
+```
+
+在实际的执行过程中，会进入到第一个`getArbitraryString`函数中，执行`Invoke`方法，它直接返回了要回调的方法。
+
+```cpp
+//googlemock/include/gmock/gmock-actions.h
+template <typename FunctionImpl>
+typename std::decay<FunctionImpl>::type Invoke(FunctionImpl&& function_impl) {
+  return std::forward<FunctionImpl>(function_impl);
+}
+```
+
+`Invoke`方法会调用`FunctionMocker`中的`PerformDefaultAction`方法，它会首先进行`Matcher`的查找，如果没有找到，则执行默认逻辑。
+
+```cpp
+// Performs the default action of this mock function on the given
+  // arguments and returns the result. Asserts (or throws if
+  // exceptions are enabled) with a helpful call description if there
+  // is no valid return value. This method doesn't depend on the
+  // mutable state of this object, and thus can be called concurrently
+  // without locking.
+  // L = *
+  Result PerformDefaultAction(ArgumentTuple&& args,
+                              const std::string& call_description) const {
+    const OnCallSpec<F>* const spec = this->FindOnCallSpec(args);
+    if (spec != nullptr) {
+      return spec->GetAction().Perform(std::move(args));
+    }
+    const std::string message =
+        call_description +
+        "\n    The mock function has no default action "
+        "set, and its return type has no default value set.";
+#if GTEST_HAS_EXCEPTIONS
+    if (!DefaultValue<Result>::Exists()) {
+      throw std::runtime_error(message);
+    }
+#else
+    Assert(DefaultValue<Result>::Exists(), "", -1, message);
+#endif
+    return DefaultValue<Result>::Get();
+  }
+```
+
+总得来看，`MOCK_METHOD`方法会生成一个`FunctionMocker`对象，以及和原函数同名的函数。
+
+然后再代码中调用这个被Mock的函数时，会调用到宏展开后的方法，`WillRepeatedly`标记了可重复调用的`Action`，`Invoke`则定义了真正要执行的操作。
