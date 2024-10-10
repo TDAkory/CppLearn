@@ -122,7 +122,79 @@ class BenchmarkFamilies {
 };
 ```
 
-`BenchmarkFamilies`是一个全局单例，并利用`vector`来保存构建出来的`Benchmark`
+`BenchmarkFamilies`是一个全局单例，并利用`vector`来保存构建出来的`Benchmark`。
+
+这样就结束了么？非也，在我们使用`BENCHMARK(...)`的时候，是可以给这个`Benchmark`指定参数的，比如`Arg`,`Range`,`Threads`,`Iterations`等待，这些参数又是如何保存、如何生效的呢？
+
+## `class Benchmark`
+
+在前面的小结其实我们已经注意到，`class BENCHMARK_EXPORT FunctionBenchmark : public Benchmark`，这里的基类`Benchmark`可以回答上面的问题：
+
+```cpp
+// ------------------------------------------------------
+// Benchmark registration object.  The BENCHMARK() macro expands
+// into an internal::Benchmark* object.  Various methods can
+// be called on this object to change the properties of the benchmark.
+// Each method returns "this" so that multiple method calls can
+// chained into one expression.
+class BENCHMARK_EXPORT Benchmark {
+
+    ...
+
+private:
+  std::string name_;
+  AggregationReportMode aggregation_report_mode_;
+  std::vector<std::string> arg_names_;       // Args for all benchmark runs
+  std::vector<std::vector<int64_t> > args_;  // Args for all benchmark runs
+
+  TimeUnit time_unit_;
+  bool use_default_time_unit_;
+
+  int range_multiplier_;
+  double min_time_;
+  double min_warmup_time_;
+  IterationCount iterations_;
+  int repetitions_;
+  bool measure_process_cpu_time_;
+  bool use_real_time_;
+  bool use_manual_time_;
+  BigO complexity_;
+  BigOFunc* complexity_lambda_;
+  std::vector<Statistics> statistics_;
+  std::vector<int> thread_counts_;
+
+  typedef void (*callback_function)(const benchmark::State&);
+  callback_function setup_;
+  callback_function teardown_;
+};
+```
+
+可以看到这个基类包含了benchmark支持的各种可配置参数，这些参数都会保存在`Bencmark`的成员变量里面，我们以`Range`,`Threads`两中参数类型为例，来分析下其存储方式
+
+```cpp
+Benchmark* Benchmark::Range(int64_t start, int64_t limit) {
+  BM_CHECK(ArgsCnt() == -1 || ArgsCnt() == 1);
+  std::vector<int64_t> arglist;
+  AddRange(&arglist, start, limit, range_multiplier_);
+
+  for (int64_t i : arglist) {
+    args_.push_back({i});
+  }
+  return this;
+}
+```
+
+可以看到`Range`调用了帮助函数`AddRange`，将我们的入参展开为一组实际参数，然后保存在成员变量`args_`里面
+
+```cpp
+Benchmark* Benchmark::Threads(int t) {
+  BM_CHECK_GT(t, 0);
+  thread_counts_.push_back(t);
+  return this;
+}
+```
+
+线程数则保存在成员变量`thread_counts_`里面，注意这里使用`vector`来保存每一种线程数，这会影响后续生成的实际的`benchmark`个数。
 
 ## `BENCHMARK_MAIN()`
 
@@ -203,4 +275,5 @@ size_t RunSpecifiedBenchmarks(BenchmarkReporter* display_reporter,
 }
 ```
 
-排除一些分支逻辑和输出逻辑，这里的两个核心函数是：`FindBenchmarksInternal`, `RunBenchmarks`，我们逐个分析：
+排除一些分支逻辑和输出逻辑，这里的两个核心函数是：`FindBenchmarksInternal`, `RunBenchmarks`。
+
