@@ -126,4 +126,81 @@ class BenchmarkFamilies {
 
 ## `BENCHMARK_MAIN()`
 
-benchmark的入口是`BENCHMARK_MAIN()`
+benchmark的入口是`BENCHMARK_MAIN()`：
+
+```cpp
+// Helper macro to create a main routine in a test that runs the benchmarks
+// Note the workaround for Hexagon simulator passing argc != 0, argv = NULL.
+#define BENCHMARK_MAIN()                                                \
+  int main(int argc, char** argv) {                                     \
+    char arg0_default[] = "benchmark";                                  \
+    char* args_default = arg0_default;                                  \
+    if (!argv) {                                                        \
+      argc = 1;                                                         \
+      argv = &args_default;                                             \
+    }                                                                   \
+    ::benchmark::Initialize(&argc, argv);                               \
+    if (::benchmark::ReportUnrecognizedArguments(argc, argv)) return 1; \
+    ::benchmark::RunSpecifiedBenchmarks();                              \
+    ::benchmark::Shutdown();                                            \
+    return 0;                                                           \
+  }                                                                     \
+  int main(int, char**)
+```
+
+其中，`::benchmark::Initialize`的核心就是解析了命令行参数，并设置了日志级别
+
+```cpp
+void Initialize(int* argc, char** argv, void (*HelperPrintf)()) {
+  internal::HelperPrintf = HelperPrintf;
+  internal::ParseCommandLineFlags(argc, argv);
+  internal::LogLevel() = FLAGS_v;
+}
+```
+
+完成初始化之后，还需要判断是否存在未识别的命令行参数，会输出日志并中断执行。
+
+如果一切正常，则会执行benchmark。可以看到，命令行参数`benchmark_filter`会作为过滤条件传入，用来匹配需要运行的目标函数，如果该参数为空，则传递下去的是`.`来进行正则匹配。
+
+```cpp
+size_t RunSpecifiedBenchmarks() {
+  return RunSpecifiedBenchmarks(nullptr, nullptr, FLAGS_benchmark_filter);
+}
+
+size_t RunSpecifiedBenchmarks(BenchmarkReporter* display_reporter,
+                              BenchmarkReporter* file_reporter,
+                              std::string spec) {
+  if (spec.empty() || spec == "all")
+    spec = ".";  // Regexp that matches all benchmarks
+
+  // Setup the reporters
+  ...
+
+  std::vector<internal::BenchmarkInstance> benchmarks;
+  if (!FindBenchmarksInternal(spec, &benchmarks, &Err)) {
+    Out.flush();
+    Err.flush();
+    return 0;
+  }
+
+  if (benchmarks.empty()) {
+    Err << "Failed to match any benchmarks against regex: " << spec << "\n";
+    Out.flush();
+    Err.flush();
+    return 0;
+  }
+
+  if (FLAGS_benchmark_list_tests) {
+    for (auto const& benchmark : benchmarks)
+      Out << benchmark.name().str() << "\n";
+  } else {
+    internal::RunBenchmarks(benchmarks, display_reporter, file_reporter);
+  }
+
+  Out.flush();
+  Err.flush();
+  return benchmarks.size();
+}
+```
+
+排除一些分支逻辑和输出逻辑，这里的两个核心函数是：`FindBenchmarksInternal`, `RunBenchmarks`，我们逐个分析：
