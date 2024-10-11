@@ -122,7 +122,7 @@ class BenchmarkFamilies {
 };
 ```
 
-`BenchmarkFamilies`是一个全局单例，并利用`vector`来保存构建出来的`Benchmark`。
+`BenchmarkFamilies`是一个全局单例，并利用`vector`来保存构建出来的`Benchmark`，每一个用户定义的被测试函数，被成为一个`family`，根据参数的不同，可能会扩展出多个实际的压测对象。
 
 这样就结束了么？非也，在我们使用`BENCHMARK(...)`的时候，是可以给这个`Benchmark`指定参数的，比如`Arg`,`Range`,`Threads`,`Iterations`等待，这些参数又是如何保存、如何生效的呢？
 
@@ -277,3 +277,211 @@ size_t RunSpecifiedBenchmarks(BenchmarkReporter* display_reporter,
 
 排除一些分支逻辑和输出逻辑，这里的两个核心函数是：`FindBenchmarksInternal`, `RunBenchmarks`。
 
+```cpp
+// FIXME: This function is a hack so that benchmark.cc can access
+// `BenchmarkFamilies`
+bool FindBenchmarksInternal(const std::string& re,
+                            std::vector<BenchmarkInstance>* benchmarks,
+                            std::ostream* Err) {
+  return BenchmarkFamilies::GetInstance()->FindBenchmarks(re, benchmarks, Err);
+}
+
+bool BenchmarkFamilies::FindBenchmarks(
+    std::string spec, std::vector<BenchmarkInstance>* benchmarks,
+    std::ostream* ErrStream) {
+  ...
+
+  // Special list of thread counts to use when none are specified
+  const std::vector<int> one_thread = {1};
+
+  int next_family_index = 0;
+
+  MutexLock l(mutex_);
+  for (std::unique_ptr<Benchmark>& family : families_) {
+    int family_index = next_family_index;
+    int per_family_instance_index = 0;
+
+    // Family was deleted or benchmark doesn't match
+    if (!family) continue;
+
+    // 如果用户没有传入任何参数，这里会构造空参数传入
+    if (family->ArgsCnt() == -1) {              
+      family->Args({});
+    }
+    // 压测的线程数：若用户未配置则为1，否则为用户配置
+    const std::vector<int>* thread_counts =
+        (family->thread_counts_.empty()
+             ? &one_thread
+             : &static_cast<const std::vector<int>&>(family->thread_counts_));
+    // 一个被测函数扩展出来的、真实的测试对象数量：是 参数个数 与 线程数 的乘积（参数向量和线程向量的叉乘）
+    const size_t family_size = family->args_.size() * thread_counts->size();
+    // The benchmark will be run at least 'family_size' different inputs.
+    // If 'family_size' is very large warn the user.
+    if (family_size > kMaxFamilySize) {
+      Err << "The number of inputs is very large. " << family->name_
+          << " will be repeated at least " << family_size << " times.\n";
+    }
+    // reserve in the special case the regex ".", since we know the final
+    // family size.  this doesn't take into account any disabled benchmarks
+    // so worst case we reserve more than we need.
+    
+    // 如果命令行的过滤条件是空，即通配，则扩展benchmarks，为insert做准备
+    if (spec == ".") benchmarks->reserve(benchmarks->size() + family_size);
+
+    for (auto const& args : family->args_) {
+      for (int num_threads : *thread_counts) {
+        // 在这里进行了参数和线程的组合，构造了一个测试对象`BenchmarkInstance`
+        BenchmarkInstance instance(family.get(), family_index,
+                                   per_family_instance_index, args,
+                                   num_threads);
+
+        const auto full_name = instance.name().str();
+        // 此时会根据构造的测试对象的名字，来进行过滤。通过的才会加入到benchmarks里面
+        if (full_name.rfind(kDisabledPrefix, 0) != 0 &&
+            ((re.Match(full_name) && !is_negative_filter) ||
+             (!re.Match(full_name) && is_negative_filter))) {
+          benchmarks->push_back(std::move(instance));
+
+          ++per_family_instance_index;
+
+          // Only bump the next family index once we've estabilished that
+          // at least one instance of this family will be run.
+          if (next_family_index == family_index) ++next_family_index;
+        }
+      }
+    }
+  }
+  return true;
+}
+```
+
+非常直观的，`FindBenchmarksInternal`通过遍历`benchmark_families`(由用户通过`Benchmark(...)`注入)，然后遍历每个`benchmark_family`的 **参数**、**线程** 组合，通过正则匹配来过滤本次需要运行的测试实例`BenchmarkInstance`，并返回这些过滤结果，交给`RunBenchmarks`来运行。
+
+```cpp
+void RunBenchmarks(const std::vector<BenchmarkInstance>& benchmarks,
+                   BenchmarkReporter* display_reporter,
+                   BenchmarkReporter* file_reporter) {
+  // Note the file_reporter can be null.
+  BM_CHECK(display_reporter != nullptr);
+
+  // Determine the width of the name field using a minimum width of 10.
+  bool might_have_aggregates = FLAGS_benchmark_repetitions > 1;
+  size_t name_field_width = 10;
+  size_t stat_field_width = 0;
+  for (const BenchmarkInstance& benchmark : benchmarks) {
+    name_field_width =
+        std::max<size_t>(name_field_width, benchmark.name().str().size());
+    might_have_aggregates |= benchmark.repetitions() > 1;
+
+    for (const auto& Stat : benchmark.statistics())
+      stat_field_width = std::max<size_t>(stat_field_width, Stat.name_.size());
+  }
+  if (might_have_aggregates) name_field_width += 1 + stat_field_width;
+
+  // Print header here
+  BenchmarkReporter::Context context;
+  context.name_field_width = name_field_width;
+
+  // Keep track of running times of all instances of each benchmark family.
+  std::map<int /*family_index*/, BenchmarkReporter::PerFamilyRunReports>
+      per_family_reports;
+
+  if (display_reporter->ReportContext(context) &&
+      (!file_reporter || file_reporter->ReportContext(context))) {
+    FlushStreams(display_reporter);
+    FlushStreams(file_reporter);
+
+    size_t num_repetitions_total = 0;
+
+    // This perfcounters object needs to be created before the runners vector
+    // below so it outlasts their lifetime.
+    PerfCountersMeasurement perfcounters(
+        StrSplit(FLAGS_benchmark_perf_counters, ','));
+
+    // Vector of benchmarks to run
+    std::vector<internal::BenchmarkRunner> runners;
+    runners.reserve(benchmarks.size());
+
+    // Count the number of benchmarks with threads to warn the user in case
+    // performance counters are used.
+    int benchmarks_with_threads = 0;
+
+    // Loop through all benchmarks
+    for (const BenchmarkInstance& benchmark : benchmarks) {
+      BenchmarkReporter::PerFamilyRunReports* reports_for_family = nullptr;
+      if (benchmark.complexity() != oNone)
+        reports_for_family = &per_family_reports[benchmark.family_index()];
+      benchmarks_with_threads += (benchmark.threads() > 1);
+      runners.emplace_back(benchmark, &perfcounters, reports_for_family);
+      int num_repeats_of_this_instance = runners.back().GetNumRepeats();
+      num_repetitions_total +=
+          static_cast<size_t>(num_repeats_of_this_instance);
+      if (reports_for_family)
+        reports_for_family->num_runs_total += num_repeats_of_this_instance;
+    }
+    assert(runners.size() == benchmarks.size() && "Unexpected runner count.");
+
+    // The use of performance counters with threads would be unintuitive for
+    // the average user so we need to warn them about this case
+    if ((benchmarks_with_threads > 0) && (perfcounters.num_counters() > 0)) {
+      GetErrorLogInstance()
+          << "***WARNING*** There are " << benchmarks_with_threads
+          << " benchmarks with threads and " << perfcounters.num_counters()
+          << " performance counters were requested. Beware counters will "
+             "reflect the combined usage across all "
+             "threads.\n";
+    }
+
+    std::vector<size_t> repetition_indices;
+    repetition_indices.reserve(num_repetitions_total);
+    for (size_t runner_index = 0, num_runners = runners.size();
+         runner_index != num_runners; ++runner_index) {
+      const internal::BenchmarkRunner& runner = runners[runner_index];
+      std::fill_n(std::back_inserter(repetition_indices),
+                  runner.GetNumRepeats(), runner_index);
+    }
+    assert(repetition_indices.size() == num_repetitions_total &&
+           "Unexpected number of repetition indexes.");
+
+    if (FLAGS_benchmark_enable_random_interleaving) {
+      std::random_device rd;
+      std::mt19937 g(rd());
+      std::shuffle(repetition_indices.begin(), repetition_indices.end(), g);
+    }
+
+    for (size_t repetition_index : repetition_indices) {
+      internal::BenchmarkRunner& runner = runners[repetition_index];
+      runner.DoOneRepetition();
+      if (runner.HasRepeatsRemaining()) continue;
+      // FIXME: report each repetition separately, not all of them in bulk.
+
+      display_reporter->ReportRunsConfig(
+          runner.GetMinTime(), runner.HasExplicitIters(), runner.GetIters());
+      if (file_reporter)
+        file_reporter->ReportRunsConfig(
+            runner.GetMinTime(), runner.HasExplicitIters(), runner.GetIters());
+
+      RunResults run_results = runner.GetResults();
+
+      // Maybe calculate complexity report
+      if (const auto* reports_for_family = runner.GetReportsForFamily()) {
+        if (reports_for_family->num_runs_done ==
+            reports_for_family->num_runs_total) {
+          auto additional_run_stats = ComputeBigO(reports_for_family->Runs);
+          run_results.aggregates_only.insert(run_results.aggregates_only.end(),
+                                             additional_run_stats.begin(),
+                                             additional_run_stats.end());
+          per_family_reports.erase(
+              static_cast<int>(reports_for_family->Runs.front().family_index));
+        }
+      }
+
+      Report(display_reporter, file_reporter, run_results);
+    }
+  }
+  display_reporter->Finalize();
+  if (file_reporter) file_reporter->Finalize();
+  FlushStreams(display_reporter);
+  FlushStreams(file_reporter);
+}
+```
