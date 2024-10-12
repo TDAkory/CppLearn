@@ -362,25 +362,14 @@ void RunBenchmarks(const std::vector<BenchmarkInstance>& benchmarks,
                    BenchmarkReporter* display_reporter,
                    BenchmarkReporter* file_reporter) {
   // Note the file_reporter can be null.
-  BM_CHECK(display_reporter != nullptr);
+  ...
 
   // Determine the width of the name field using a minimum width of 10.
-  bool might_have_aggregates = FLAGS_benchmark_repetitions > 1;
-  size_t name_field_width = 10;
-  size_t stat_field_width = 0;
-  for (const BenchmarkInstance& benchmark : benchmarks) {
-    name_field_width =
-        std::max<size_t>(name_field_width, benchmark.name().str().size());
-    might_have_aggregates |= benchmark.repetitions() > 1;
-
-    for (const auto& Stat : benchmark.statistics())
-      stat_field_width = std::max<size_t>(stat_field_width, Stat.name_.size());
-  }
-  if (might_have_aggregates) name_field_width += 1 + stat_field_width;
+  // 一些格式对齐和美化的工作
+  ...
 
   // Print header here
-  BenchmarkReporter::Context context;
-  context.name_field_width = name_field_width;
+  ...
 
   // Keep track of running times of all instances of each benchmark family.
   std::map<int /*family_index*/, BenchmarkReporter::PerFamilyRunReports>
@@ -388,8 +377,7 @@ void RunBenchmarks(const std::vector<BenchmarkInstance>& benchmarks,
 
   if (display_reporter->ReportContext(context) &&
       (!file_reporter || file_reporter->ReportContext(context))) {
-    FlushStreams(display_reporter);
-    FlushStreams(file_reporter);
+    ...
 
     size_t num_repetitions_total = 0;
 
@@ -412,12 +400,9 @@ void RunBenchmarks(const std::vector<BenchmarkInstance>& benchmarks,
       if (benchmark.complexity() != oNone)
         reports_for_family = &per_family_reports[benchmark.family_index()];
       benchmarks_with_threads += (benchmark.threads() > 1);
+      // 遍历benchmark并构造runner
       runners.emplace_back(benchmark, &perfcounters, reports_for_family);
-      int num_repeats_of_this_instance = runners.back().GetNumRepeats();
-      num_repetitions_total +=
-          static_cast<size_t>(num_repeats_of_this_instance);
-      if (reports_for_family)
-        reports_for_family->num_runs_total += num_repeats_of_this_instance;
+      ...
     }
     assert(runners.size() == benchmarks.size() && "Unexpected runner count.");
 
@@ -432,6 +417,7 @@ void RunBenchmarks(const std::vector<BenchmarkInstance>& benchmarks,
              "threads.\n";
     }
 
+    // 根据每个 runner 的重复次数，把 runner_index 重复构造，并塞入到 repetition_indices 中
     std::vector<size_t> repetition_indices;
     repetition_indices.reserve(num_repetitions_total);
     for (size_t runner_index = 0, num_runners = runners.size();
@@ -443,6 +429,7 @@ void RunBenchmarks(const std::vector<BenchmarkInstance>& benchmarks,
     assert(repetition_indices.size() == num_repetitions_total &&
            "Unexpected number of repetition indexes.");
 
+    // 如果打开了乱序运行的配置，则对 repetition_indices 执行一次 shuffle
     if (FLAGS_benchmark_enable_random_interleaving) {
       std::random_device rd;
       std::mt19937 g(rd());
@@ -455,33 +442,117 @@ void RunBenchmarks(const std::vector<BenchmarkInstance>& benchmarks,
       if (runner.HasRepeatsRemaining()) continue;
       // FIXME: report each repetition separately, not all of them in bulk.
 
-      display_reporter->ReportRunsConfig(
-          runner.GetMinTime(), runner.HasExplicitIters(), runner.GetIters());
-      if (file_reporter)
-        file_reporter->ReportRunsConfig(
-            runner.GetMinTime(), runner.HasExplicitIters(), runner.GetIters());
-
-      RunResults run_results = runner.GetResults();
-
-      // Maybe calculate complexity report
-      if (const auto* reports_for_family = runner.GetReportsForFamily()) {
-        if (reports_for_family->num_runs_done ==
-            reports_for_family->num_runs_total) {
-          auto additional_run_stats = ComputeBigO(reports_for_family->Runs);
-          run_results.aggregates_only.insert(run_results.aggregates_only.end(),
-                                             additional_run_stats.begin(),
-                                             additional_run_stats.end());
-          per_family_reports.erase(
-              static_cast<int>(reports_for_family->Runs.front().family_index));
-        }
-      }
-
-      Report(display_reporter, file_reporter, run_results);
-    }
+      // some report job
+      ...
   }
-  display_reporter->Finalize();
-  if (file_reporter) file_reporter->Finalize();
-  FlushStreams(display_reporter);
-  FlushStreams(file_reporter);
+  ...
 }
+```
+
+`RunBenchmarks`的核心逻辑就是通过遍历前面生成的`BenchmarkInstance`，来生成对应的`BenchmarkRunner`对象，并逐个执行这些Runner。
+
+```cpp
+void BenchmarkRunner::DoOneRepetition() {
+  ...
+
+  // We *may* be gradually increasing the length (iteration count)
+  // of the benchmark until we decide the results are significant.
+  // And once we do, we report those last results and exit.
+  // Please do note that the if there are repetitions, the iteration count
+  // is *only* calculated for the *first* repetition, and other repetitions
+  // simply use that precomputed iteration count.
+  for (;;) {
+    b.Setup();
+    i = DoNIterations();
+    b.Teardown();
+
+    // Do we consider the results to be significant?
+    // If we are doing repetitions, and the first repetition was already done,
+    // it has calculated the correct iteration time, so we have run that very
+    // iteration count just now. No need to calculate anything. Just report.
+    // Else, the normal rules apply.
+    const bool results_are_significant = !is_the_first_repetition ||
+                                         has_explicit_iteration_count ||
+                                         ShouldReportIterationResults(i);
+
+    if (results_are_significant) break;  // Good, let's report them!
+
+    // Nope, bad iteration. Let's re-estimate the hopefully-sufficient
+    // iteration count, and run the benchmark again...
+
+    iters = PredictNumItersNeeded(i);
+    assert(iters > i.iters &&
+           "if we did more iterations than we want to do the next time, "
+           "then we should have accepted the current iteration run.");
+  }
+
+  // Produce memory measurements if requested.
+  ...
+
+  // Ok, now actually report.
+  ...
+}
+```
+
+`DoNIterations()`负责根据当前`BenchmarkInstance`的线程配置，在线程池中执行一次测试。
+
+当用户没有通过参数设置一个`benchmark`执行多少个循环的时候，具体执行的循环个数是有程序自己决定的，通过`ShouldReportIterationResults`来判断何时终止当前Runner的循环。
+
+以上就是Benchmark的执行流程了。
+
+## CPU开销是如何统计的
+
+```cpp
+BenchmarkRunner::IterationResults BenchmarkRunner::DoNIterations() {
+  
+
+  std::unique_ptr<internal::ThreadManager> manager;
+  manager.reset(new internal::ThreadManager(b.threads()));
+
+  // Run all but one thread in separate threads
+  for (std::size_t ti = 0; ti < pool.size(); ++ti) {
+    pool[ti] = std::thread(&RunInThread, &b, iters, static_cast<int>(ti + 1),
+                           manager.get(), perf_counters_measurement_ptr,
+                           /*profiler_manager=*/nullptr);
+  }
+  // And run one thread here directly.
+  // (If we were asked to run just one thread, we don't create new threads.)
+  // Yes, we need to do this here *after* we start the separate threads.
+  RunInThread(&b, iters, 0, manager.get(), perf_counters_measurement_ptr,
+              /*profiler_manager=*/nullptr);
+
+  // The main thread has finished. Now let's wait for the other threads.
+  manager->WaitForAllThreads();
+  ...
+  return i;
+}
+
+// Execute one thread of benchmark b for the specified number of iterations.
+// Adds the stats collected for the thread into manager->results.
+void RunInThread(const BenchmarkInstance* b, IterationCount iters,
+                 int thread_id, ThreadManager* manager,
+                 PerfCountersMeasurement* perf_counters_measurement,
+                 ProfilerManager* profiler_manager_) {
+  internal::ThreadTimer timer(
+      b->measure_process_cpu_time()
+          ? internal::ThreadTimer::CreateProcessCpuTime()
+          : internal::ThreadTimer::Create());
+
+  State st = b->Run(iters, thread_id, &timer, manager,
+                    perf_counters_measurement, profiler_manager_);
+  BM_CHECK(st.skipped() || st.iterations() >= st.max_iterations)
+      << "Benchmark returned before State::KeepRunning() returned false!";
+  {
+    MutexLock l(manager->GetBenchmarkMutex());
+    internal::ThreadManager::Result& results = manager->results;
+    results.iterations += st.iterations();
+    results.cpu_time_used += timer.cpu_time_used();
+    results.real_time_used += timer.real_time_used();
+    results.manual_time_used += timer.manual_time_used();
+    results.complexity_n += st.complexity_length_n();
+    internal::Increment(&results.counters, st.counters);
+  }
+  manager->NotifyThreadComplete();
+}
+
 ```
