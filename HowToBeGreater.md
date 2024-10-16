@@ -47,11 +47,15 @@
 
 ### Rust
 
+> 一种面向未来的可能性
+
 * <font color=red>[P0]</font> rust by practice
 * leveldb-rs
 * 语言特性深入理解
 
 ### Golang
+
+> 按照团队要求，作为第二开发语言
 
 * 复习 Basic concept
 * go in deep
@@ -83,6 +87,7 @@
 * C++ ProcFrameWork
 * C++ 反射框架
 * C++ 超时工具
+* a simple coroutine framework
 * Rust leveldb-rs
 * Things between socket send & recv
 * why clickhouse fast
@@ -90,7 +95,6 @@
 * 理解unix domain socket
 * unix定时器的支持
 * <font color=green>[Done]</font> why c++ has argument dependent lookup?
-* a simple coroutine framework
 * 从源码理解select poll epoll
 * <font color=green>[Done]</font> 深入理解flock以及一些用法
 * 什么事伪共享 & 为什么有性能损耗
