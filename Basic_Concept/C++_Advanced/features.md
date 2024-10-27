@@ -4,11 +4,14 @@
 
 * [parameter_pack](https://en.cppreference.com/w/cpp/language/parameter_pack)
 
+## C++14
+
 ## C++17
 
 * [std::optional](https://en.cppreference.com/w/cpp/utility/optional)
 * [std::variant](https://en.cppreference.com/w/cpp/utility/variant)
 * [Fold expressions](https://en.cppreference.com/w/cpp/language/fold)
+* [execution policy](https://en.cppreference.com/w/cpp/header/execution)
 
 ## C++20
 
@@ -21,3 +24,7 @@
 ## C++23
 
 * [std::flat_map](https://en.cppreference.com/w/cpp/container/flat_map)
+
+## C++26
+
+* [Execution library](https://en.cppreference.com/w/cpp/execution)

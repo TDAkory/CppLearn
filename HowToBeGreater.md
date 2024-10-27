@@ -65,11 +65,12 @@
 * kernel code unix
 * 模板元
 * coroutine
+* executor
 * lock-free
 * Topics: K8s OLAP-Engine
 * 职业生涯：Continue? 量化？游戏？人工智能？
 * 广度：AI-GPT 业界TSDB
-* 深度：调度算法、限流算法、定时器
+* 深度(system design)：调度算法、限流算法、定时器
 
 ### 语言
 
