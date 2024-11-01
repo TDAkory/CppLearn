@@ -108,7 +108,7 @@
 * 金融理论 by Yale   行为经济学
 * MIT6.824
 * 复习 Algorithm & Data Structure
-* 学习 System Design ： System Desing 101
+* 学习 System Design : System Desing 101
 * 2023 CppCons CppSummit & CppReference研读
 * leveldb源码解析
 * 数据库系统内幕
