@@ -11,6 +11,7 @@
     - [字符串表](#字符串表)
   - [链接的接口----符号](#链接的接口----符号)
     - [符号表](#符号表)
+  - [调试信息](#调试信息)
 
 
 可执行文件的格式，主要是Windows下的PE（Portable Executable）和Linux的ELF（Executable Linkable Format），两者都是COFF（Common file format）的变种。
@@ -257,6 +258,8 @@ Key to Flags:
 
 字符串表（String Table `.strtab`）保存普通字符串，段表字符串表（Section Header String Table `.shstrtab`）保存段表中用到的字符串，比如段名。
 
+一种常见做法是把字符串集中起来存放到一个表，然后使用字符串在表中的偏移来引用字符串。
+
 对照 ELF header，`e_shstrndx` `Section header string table index: 12`，就是该段表在所有段表的下标，即 `[12] .shstrtab`。
 
 因此通过 ELF header 和 段表，可以解析整个ELF文件。
@@ -289,4 +292,117 @@ $ nm simple_section.o
 
 ### 符号表
 
-`.symtab` `Elf32_Sym`结构
+`.symtab` `Elf32_Sym`结构：
+
+```c
+typedef struct
+{
+  Elf32_Word	st_name;		/* Symbol name (string tbl index) */
+  Elf32_Addr	st_value;		/* Symbol value */
+  Elf32_Word	st_size;		/* Symbol size */
+  unsigned char	st_info;		/* Symbol type and binding */
+  unsigned char	st_other;		/* Symbol visibility */
+  Elf32_Section	st_shndx;		/* Section index */
+} Elf32_Sym;
+```
+
+符号类型和绑定信息 st_info：
+
+* 低4位表示符号类型：包括局部符号（0）、全局符号（1）、弱引用（2）
+* 高28位表示符号的绑定信息：未知符号类型（0）、数据对象（1）、函数或可执行代码（2）、段（3）、文件名（4）
+
+符号所在的段 st_shndx：
+
+* 若符号定义在本目标文件，则记录符号所在的段在段表的下标
+* 若符号没有定义在本目标文件，则记录一些特定值
+  * 0xfff1：表示符号包含了一个绝对值，比如文件名
+  * 0xfff2：表示该符号是一个COMMON块，比如未初始化的全局符号定义
+  * 0：表示未定义，即本目标文件被引用，定义在其他目标文件中
+
+符号值 st_value：
+
+* 如果是符号的定义，且符号不是COMMON块，则表示符号在段中的偏移
+* 如果符号是COMMON块，则表示该符号的对齐属性
+* 在可执行文件中，表示符号的虚拟地址，作用于动态链接器
+
+```shell
+$ readelf -s simple_section.o
+
+Symbol table '.symtab' contains 17 entries:
+   Num:    Value          Size Type    Bind   Vis      Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND
+     1: 0000000000000000     0 FILE    LOCAL  DEFAULT  ABS simple_section.c
+     2: 0000000000000000     0 SECTION LOCAL  DEFAULT    1
+     3: 0000000000000000     0 SECTION LOCAL  DEFAULT    3
+     4: 0000000000000000     0 SECTION LOCAL  DEFAULT    4
+     5: 0000000000000000     0 SECTION LOCAL  DEFAULT    5
+     6: 0000000000000004     4 OBJECT  LOCAL  DEFAULT    3 static_var.1965
+     7: 0000000000000000     4 OBJECT  LOCAL  DEFAULT    4 static_var2.1966
+     8: 0000000000000000     0 SECTION LOCAL  DEFAULT    7
+     9: 0000000000000000     0 SECTION LOCAL  DEFAULT    8
+    10: 0000000000000000     0 SECTION LOCAL  DEFAULT    6
+    11: 0000000000000000     4 OBJECT  GLOBAL DEFAULT    3 global_init_var
+    12: 0000000000000004     4 OBJECT  GLOBAL DEFAULT  COM global_uninit_var
+    13: 0000000000000000    36 FUNC    GLOBAL DEFAULT    1 func1
+    14: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND _GLOBAL_OFFSET_TABLE_
+    15: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND printf
+    16: 0000000000000024    51 FUNC    GLOBAL DEFAULT    1 main
+```
+
+**特殊符号**：在使用ld作为链接器来链接生产可执行文件时，会为我们定义很多特殊符号，是定义在链接器的链接脚本中的，可以直接声明并引用：
+
+* __executable_start 程序起始地址
+* __etext 代码段结束地址
+* _edata 数据段结束地址
+* _end 程序结束地址
+
+**符号修饰与函数签名**：GCC的基本C++名称修饰方法如下:所有的符号都以“_Z”开头，对于嵌套的名字(在 称空间或在类里面的)，后面紧跟 “N”，然后是各个名称空间和类的名字，每个名字前是名字字符串长度，再以“E”结尾。比如`N::C::func`经过名称修饰以后就是`_ZN1N1C4funcE`。 对于一个函数来说，它的参数列表紧跟在“E”后面，对于int类型来说，就是字母“i”。所以整个`N::C::func(int)`函数签名经过修饰为`_ZN1N1C4funcEi`。可以通过 `c++filt` 来解析被修饰过的名称：
+
+```shell
+$ c++filt _ZN1N1C4funcE
+N::C::func
+```
+
+**`extern "C"`**：编译器将该标识内部的代码都当做C语言代码处理，因此前面的名称修饰机制不会再这里起作用。
+
+**弱符号和强符号**：对C/C++来说，编译器默认函数和初始化的全局变量为强符号，未初始化的全局变量为弱符号，也可以通过`__attribute__((weak))`来定义任何一个强符号为弱符号。强符号和弱符号都是针对定义的，不针对符号的引用。链接器在处理多次被定义的全局符号时：
+
+1. 不允许强符号被重复定义
+2. 如果一个符号在某个目标文件中是强符号，在其他文件中都是弱符号，则选择强符号
+3. 如果一个符号在所有目标文件中都是弱符号，则选择占用空间最大的一个定义
+
+**弱应用和强引用**：强引用找不到会报未定义错误，弱引用找不到，编译器不认为是一个错误，会默认为0或一个特殊值（可能引发运行错误）。对库比较友好，库定义的弱符号可以被用户定义的强符号覆盖；对程序裁剪也有好处，定义一些扩展功能为弱引用，不影响正常链接。
+
+一个声明弱引用，来判断实际链接版本，并控制执行分支的例子：
+
+```c
+// pthread_link.c
+#include <stdio.h>
+#include <pthread.h>
+
+int pthread_create(pthread_t *, const pthread_attr_t *, void * (*)(void*), void*) __attribute__((weak));
+
+int main() {
+	if (pthread_create) {
+		printf("This is multi-thread version!\n");
+	} else {
+		printf("This is single-thread version!\n");
+	}
+}
+```
+
+```shell
+$ gcc pthread_link.c -o pt
+$ ./pt
+This is single-thread version!
+$ gcc pthread_link.c -o pt -lpthread
+$ ./pt
+This is multi-thread version!
+```
+
+## 调试信息
+
+ELF文件采用的DWARF(Debug With Arbitrary Record Fromat)标准来记录调试信息
+
+可以用strip来去掉ELF文件中的调试信息
+
