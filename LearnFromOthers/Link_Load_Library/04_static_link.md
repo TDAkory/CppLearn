@@ -112,3 +112,60 @@ Idx Name          Size      VMA               LMA               File off  Algn
 符号的虚拟地址，则通过 `输出文件段地址 + 输入文件段在输出文件段的偏移 + 符号在段内的偏移` 进行计算
 
 ## 符号解析和重定位
+
+### 重定位
+
+a.c中使用了shared和swap，那么编译器在编译a.c的时候，是如何处理这两个符号的呢？
+
+```shell
+$ objdump -d a.o
+
+a.o:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000000000 <main>:
+   0:   55                      push   %rbp
+   1:   48 89 e5                mov    %rsp,%rbp
+   4:   48 83 ec 10             sub    $0x10,%rsp
+   8:   c7 45 fc 64 00 00 00    movl   $0x64,-0x4(%rbp)
+   f:   48 8d 45 fc             lea    -0x4(%rbp),%rax
+  13:   48 8d 35 00 00 00 00    lea    0x0(%rip),%rsi        # 1a <main+0x1a>
+  1a:   48 89 c7                mov    %rax,%rdi
+  1d:   b8 00 00 00 00          mov    $0x0,%eax
+  22:   e8 00 00 00 00          callq  27 <main+0x27>
+  27:   b8 00 00 00 00          mov    $0x0,%eax
+  2c:   c9                      leaveq 
+  2d:   c3                      retq 
+```
+
+这里在未进行空间分配之前，main的起始地址是0x0，同时，shared和swap两个符号的地址，也是0x0，可以从0x13、0x22两条指令看到
+
+```shell
+$ objdump -d ab
+
+ab:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000401000 <main>:
+  401000:       55                      push   %rbp
+  401001:       48 89 e5                mov    %rsp,%rbp
+  401004:       48 83 ec 10             sub    $0x10,%rsp
+  401008:       c7 45 fc 64 00 00 00    movl   $0x64,-0x4(%rbp)
+  40100f:       48 8d 45 fc             lea    -0x4(%rbp),%rax
+  401013:       48 8d 35 e6 2f 00 00    lea    0x2fe6(%rip),%rsi        # 404000 <shared>
+  40101a:       48 89 c7                mov    %rax,%rdi
+  40101d:       b8 00 00 00 00          mov    $0x0,%eax
+  401022:       e8 07 00 00 00          callq  40102e <swap>
+  401027:       b8 00 00 00 00          mov    $0x0,%eax
+  40102c:       c9                      leaveq 
+  40102d:       c3                      retq   
+
+000000000040102e <swap>:
+  ......
+```
+
+对比可以看到，`shared`的地址是`0x00002fe6`，`swap`的地址是`0x00000007`。这里如何理解呢？`call`指令其实是一条近地址相对位移调用指令（Call near, relative, displacement relative to next instruction）,也就是说，`call`后面的值表示跳转地址相对于下一条指令的偏移量。在上面例子中，`call`的下一条指令是`mov`，地址是`0x401027`，则`swap`的地址是 `0x401027 + 0x7 = 0x40102e`。
