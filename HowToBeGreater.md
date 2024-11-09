@@ -30,7 +30,9 @@
 ## 2024 
 
 > [To read](../Readings/ToBeRead.md)
+>
 > 在WAL + 共识 & 数据结构编码[内存&落盘] & 查询加速 & 二级索引+sorting key 等方向 选择一个 持续学习投入
+> 
 > 11、12 try some interview
 
 ### C++
@@ -49,9 +51,10 @@
 
 > 一种面向未来的可能性
 
-* <font color=red>[P0]</font> rust by practice
+* <font color=red>[P0]</font> rust by practice （目前进度在lifetime）
 * leveldb-rs
 * 语言特性深入理解
+* 写三个练手小项目（minigrep、）
 
 ### Golang
 
@@ -138,12 +141,20 @@
 ## Learn From The Best
 
 - [Textbooks](https://github.com/kaitoukito/Computer-Science-Textbooks)
+- CppCons 2023 2024 学习&记录
+- C++ Weekly from Jason
 
 ## Learn From Framwork
 
-- leveldb
+- leveldb 完成源码解析的笔记
+- boost   学习一下异步io的源码
+- folly   学习一优化的数据结构
 
 ## Domain Knowledge
+
+- 分布式系统
+- 云原生（加深理解）
+- 压缩算法
 
 ### Storage
 
