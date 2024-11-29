@@ -28,3 +28,4 @@
 ## C++26
 
 * [Execution library](https://en.cppreference.com/w/cpp/execution)
+* [Reflection for C++26](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p2996r7.html)

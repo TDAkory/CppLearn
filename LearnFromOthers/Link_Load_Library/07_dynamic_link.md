@@ -101,7 +101,9 @@ Program Headers:
 
 装载时明确起始地址，利用偏移计算符号的实际装载地址。相对应的是前面提到的链接时重定位
 
-缺陷是：指令无法再多个进程之间共享，因为每个进程装载时，空闲的地址可能是不同的，装载这个共享库时查找到的空闲的起始地址可能也是不同的，这就要求动态链接库中的可修改数据部分对于不同进程来说有多个副本。也就失去了内存节省的优点。
+缺陷是：指令无法再多个进程之间共享，因为每个进程装载时，空闲的地址可能是不同的，装载这个共享库时查找到的空闲的起始地址可能也是不同的，这对于指令部分在多个进程之间共享是不利的。
+
+当然，动态链接库中的可修改数据部分对于不同进程来说有多个副本，所以可以采用装载时重定位来处理。
 
 仅使用 `-shared` 就是装载时重定位
 
@@ -156,3 +158,202 @@ int foo() {
 假设module.c是一个共享对象的一部分，那么GCC编译器在`-fPIC`的情况下，就会把 对`global` 的调用按照跨模块模式产生代码。原因也很简单:编译器无法确定对`global` 的引用 是跨模块的还是模块内部的。即使是模块肉部的，即模块内部的全局变量的引用，按照上面 的结论，还是会产生跨模块代码，因为`global` 可能被可执行文件引用，从而使得共享模块中 对`global` 的引用要执行可执行文件中的`global` 副本。
 
 ### 数据段地址无关性
+
+装载时重定位的共享对象的运行速度要比使用地址无关代码的共享对象快，因为它省去了地址无关代码中每次访问全局数据和函数时需要做一次计算当前地址以及间接地址寻址的过程。
+
+## 延迟绑定
+
+动态链接会略微慢一些，因为：对于全局和静态的数据访问都要进行复杂的GOT定位然后间接寻址；对于模块间的调用也要先定位GOT再进行间接跳转；程序启动需要进行运行时链接工作，启动会略慢。
+
+**延迟绑定（Lazy Binding）**：当函数第一次被用到时才进行绑定（符号查找、重定位等），如果没有用到则不进行绑定。
+
+ELF使用PLT(Procedure Linkage Table)来实现延迟绑定。
+
+在Glibc中，完成地址绑定工作的函数是`_dl_runtime_resolve()`.
+
+当我们调用某个外部模块的函数时，如果按照通常的做法应该是通过 GOT 中相应的项 进行间接跳转。PLT 为了实现延迟绑定，在这个过程中间又增加了一层间接跳转。调用函数通过一个叫做 PLT 项的结构进行跳转。每个外部函数在 PLT 中都有一个相应的项，比如：
+
+```shell
+bar@plt:
+jmp *(bar@GOT)
+push n
+push moduleID
+jump _dl_runtime_resolve
+```
+
+bar@plt 的第一条指令是一条通过GOT间接跳转的指令。bar@GOT 表示 GOT 中保存 bar()这个函数相应的项。如果链接器在初始化阶段已经初始化该项，并且将 bar() 的地址填入该项，那么这个跳转指令的结果就是我们所期望的，跳转到 bar()，实现函数正确调用。 但是为了实现延迟绑定，链接器在初始化阶段并没有将bar()的地址填入到该项，而是将上面代码中第二条指令`push n`的地址填入到`bar@GOT`中，这个步骤不需要查找任何符号，所以代价很低。很明显，第一条指令的效果是跳转到第二条指令，相当于没有进行任何操作。第二条指令将一个数字n压入堆栈中，这个数字是 bar 这个符号引用在重定位表 `rel.plt`中的下标。接着又是一条push指令将模块的ID压入到堆栈，然后跳转到`_dl_runtime _resolve`。这实际上就是在实现我们前面提到的`lookup(module, function)`这个函数的调用：先将所需要决议符号的下标压入堆栈，再将模块 ID 压入堆栈，然后调用动态链接器的 `_dl_runtime_resolve()` 来完成符号解析和重定位工作。
+
+一旦`bar()`这个函数被解析完毕，当我们再次调用`bar@plt` 时，第一条jmp指令就能够跳转到真正的 `bar()`函数中，`bar()`函数返回的时候会根据堆栈里面保存的 EIP 直接返回到调用者，而不会再继续执行`bar@plt` 中第二条指令开始的那段代码，那段代码只会在符号未被解析时执行一次。
+
+上述其实是理想化的模型，真实情况会略复杂一些。
+
+`ELF` 把 `GOT` 拆分成了两个表 `.got` 和 `.got.plt` ，其中`.got`用来保存全局变量引用的地址，`.got.plt`用来保存函数引用的地址。此外，`.got.plt`的前三项还有特殊含义，分别如下：
+
+1. `.dynamic`段的地址
+2. 保存本模块的ID
+3. 保存 `_dl_runtime_resolve()`的地址
+
+第二项和第三项有动态加载器在装载共享模块时负责初始化。PLT结果也与理想化模型稍有不同，为了减少代码重复，ELF把最后两条指令防在了PLE的第一项，并规定每一项的长度是16字节，刚好存放3条指令：
+
+```shell
+PLT0:
+push *(GOT + 4)
+jump *(GOT + 8)
+...
+bar@plt
+jump *(bar@GOT)
+push n
+jump PLT0
+```
+
+`PLT`在`ELF`中以单独的段存放，段名通常叫做 `.plt` ，因为其本身是一些地址无关的代码，所以可以与代码段合并成一个可读可执行的 `Segment` 被装载到内存。
+
+## 动态链接相关结构
+
+### `.interp`段
+
+在ELF文件中决定该文件需要的动态链接器的路径，保存在`.interp`段。操作系统在对可执行文件进行加载的时候，会去寻找装载该可执行文件所需要的动态链接器，即该段指定路径的共享对象。
+
+```shell
+> objdump -s program1
+
+program1:     file format elf64-x86-64
+
+Contents of section .interp:
+ 02a8 2f6c6962 36342f6c 642d6c69 6e75782d  /lib64/ld-linux-
+ 02b8 7838362d 36342e73 6f2e3200           x86-64.so.2.    
+```
+
+也可以通过如下命令检查一个文件需要的动态链接器的路径
+
+```shell
+> readelf -l program1 | grep interpreter
+      [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]
+```
+
+### `.dynamic`段
+
+该段中的数据，对应结构 `Elf32_Dyn`，可以看作是动态链接下 ELF 文件的文件头，保存诸如：依赖哪些共享对象、动态链接符号表的位置 等信息
+
+```c
+/* Dynamic section entry.  */
+
+typedef struct
+{
+  Elf32_Sword	d_tag;			/* Dynamic entry type */
+  union
+    {
+      Elf32_Word d_val;			/* Integer value */
+      Elf32_Addr d_ptr;			/* Address value */
+    } d_un;
+} Elf32_Dyn;
+```
+
+可以查看该段的内容
+
+```shell
+> readelf -d program1
+
+Dynamic section at offset 0x2de8 contains 27 entries:
+  Tag        Type                         Name/Value
+ 0x0000000000000001 (NEEDED)             Shared library: [./Lib.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x000000000000000c (INIT)               0x1000
+ 0x000000000000000d (FINI)               0x11b4
+ 0x0000000000000019 (INIT_ARRAY)         0x3dd8
+ 0x000000000000001b (INIT_ARRAYSZ)       8 (bytes)
+ 0x000000000000001a (FINI_ARRAY)         0x3de0
+ 0x000000000000001c (FINI_ARRAYSZ)       8 (bytes)
+ 0x000000006ffffef5 (GNU_HASH)           0x308
+ 0x0000000000000005 (STRTAB)             0x3d8
+ 0x0000000000000006 (SYMTAB)             0x330
+ 0x000000000000000a (STRSZ)              141 (bytes)
+ 0x000000000000000b (SYMENT)             24 (bytes)
+ 0x0000000000000015 (DEBUG)              0x0
+ 0x0000000000000003 (PLTGOT)             0x4000
+ 0x0000000000000002 (PLTRELSZ)           24 (bytes)
+ 0x0000000000000014 (PLTREL)             RELA
+ 0x0000000000000017 (JMPREL)             0x558
+ 0x0000000000000007 (RELA)               0x498
+ 0x0000000000000008 (RELASZ)             192 (bytes)
+ 0x0000000000000009 (RELAENT)            24 (bytes)
+ 0x000000006ffffffb (FLAGS_1)            Flags: PIE
+ 0x000000006ffffffe (VERNEED)            0x478
+ 0x000000006fffffff (VERNEEDNUM)         1
+ 0x000000006ffffff0 (VERSYM)             0x466
+ 0x000000006ffffff9 (RELACOUNT)          3
+ 0x0000000000000000 (NULL)               0x0
+```
+
+### 动态符号表`dynsym`
+
+保存了动态链接的模块之间的导入导出的符号。此外还有动态符号字符串表`dynstr`，以及为了加速运行时符号查找的符号哈希表`.hash`。
+
+### 动态链接重定位表
+
+共享对象需要重定位的主要原因是导入符号的存在。
+
+在编译时，这些符号的地址是未知的。在静态链接中，链接器最终链接时修正这些地址引用。但是在动态链接中，导入符号的地址是在运行时才确定的，所以需要再运行时将这些导入符号的引用修正，也就是重定位。
+
+对于使用PIC技术的可执行文件或共享对象来说，虽然它们的代码段不需要重定位(因为地址无关)，但是数据段还包含了绝对地址的引用，因为代码段中绝对地址相关的部分被分离了出来，变成了GOT，而GOT实际上是数据段的一部分。除了GOT以外，数据段还可能包含绝对地址引用。
+
+* 静态链接：`.rel.text`代码段重定位表 `.rel.data`数据段重定位表
+* 动态链接：
+  * `.rel.dyn`对数据引用的修正，所修正的位置在`.got`以及数据段
+  * `.rel.plt`对函数引用的修正，所修正的位置在`.got.plt`
+
+
+```shell
+> readelf -r Lib.so 
+
+Relocation section '.rela.dyn' at offset 0x3f8 contains 7 entries:
+  Offset          Info           Type           Sym. Value    Sym. Name + Addend
+000000003e10  000000000008 R_X86_64_RELATIVE                    1110
+000000003e18  000000000008 R_X86_64_RELATIVE                    10d0
+000000004028  000000000008 R_X86_64_RELATIVE                    4028
+000000003fe0  000100000006 R_X86_64_GLOB_DAT 0000000000000000 _ITM_deregisterTMClone + 0
+000000003fe8  000300000006 R_X86_64_GLOB_DAT 0000000000000000 __gmon_start__ + 0
+000000003ff0  000400000006 R_X86_64_GLOB_DAT 0000000000000000 _ITM_registerTMCloneTa + 0
+000000003ff8  000600000006 R_X86_64_GLOB_DAT 0000000000000000 __cxa_finalize@GLIBC_2.2.5 + 0
+
+Relocation section '.rela.plt' at offset 0x4a0 contains 2 entries:
+  Offset          Info           Type           Sym. Value    Sym. Name + Addend
+000000004018  000200000007 R_X86_64_JUMP_SLO 0000000000000000 printf@GLIBC_2.2.5 + 0
+000000004020  000500000007 R_X86_64_JUMP_SLO 0000000000000000 sleep@GLIBC_2.2.5 + 0
+```
+
+函数的重定位入又是不是只会出现在`.rel.plt`，而不会出现在`.rel.dyn`呢? 答案为否。如果某个ELF 文件是以PIC模式编译的(动态链接的可执行文件一般是PIC的)， 并调用了外部函数`bar`，则`bar`会出现在`.rel.plt` 中；而如果不是以PIC模式编详， 则bar将出现在`.rel.dyn` 中。
+
+### 动态链接时进程堆栈初始化信息
+
+动态链接器需要知道：可执行文件有几个Segment、每个Segment的属性、程序的入口地址等，这些信息有操作系统传递，保存在进程的堆栈中。
+
+被称为辅助信息数组（Auxiliary Vector）
+
+```c
+/* This vector is normally only used by the program interpreter.  The
+   usual definition in an ABI supplement uses the name auxv_t.  The
+   vector is not usually defined in a standard <elf.h> file, but it
+   can't hurt.  We rename it to avoid conflicts.  The sizes of these
+   types are an arrangement between the exec server and the program
+   interpreter, so we don't fully specify them here.  */
+
+typedef struct
+{
+  uint32_t a_type;		/* Entry type */
+  union
+    {
+      uint32_t a_val;		/* Integer value */
+      /* We use to have pointer elements added here.  We cannot do that,
+	 though, since it does not work when using 32-bit definitions
+	 on 64-bit platforms and vice versa.  */
+    } a_un;
+} Elf32_auxv_t;
+```
+
+## 动态链接的步骤和实现
+
+启动动态链接器本身、装载所有需要的共享对象、重定位和初始化
+
+### 动态链接器自举
+
