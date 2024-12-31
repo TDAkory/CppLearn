@@ -4,15 +4,16 @@
 > <font color=red>[P0]</font>   <font color=orange>[P1]</font>   <font color=brown>[P2]</font>  <font color=green>[Done]</font>
 
 - [How to be Greater (2024)](#how-to-be-greater-2024)
+  - [2025](#2025)
   - [2024](#2024)
-    - [C++](#c)
-    - [Rust](#rust)
-    - [Golang](#golang)
-    - [Background 高性能编程](#background-高性能编程)
-    - [语言](#语言)
-    - [体质](#体质)
-    - [Project and Blog ideas](#project-and-blog-ideas)
-    - [Learn Stuffs](#learn-stuffs)
+  - [C++](#c)
+  - [Rust](#rust)
+  - [Golang](#golang)
+  - [Background 高性能编程](#background-高性能编程)
+  - [语言](#语言)
+  - [体质](#体质)
+  - [Project and Blog ideas](#project-and-blog-ideas)
+  - [Learn Stuffs](#learn-stuffs)
   - [Fundations](#fundations)
     - [OS](#os)
     - [Linux](#linux)
@@ -27,6 +28,15 @@
   - [OutPuts](#outputs)
     - [blog topics](#blog-topics)
 
+## 2025
+
+**需要完成的一些事情：**
+
+1. <font color=red>[P0]</font>[软考](https://www.ruankao.org.cn/guide) 系统架构设计师 5.25~5.28  11.9~12
+2. <font color=red>[P0]</font>一轮interview，重新认识市场
+3. <font color=orange>[P1]</font>[日语 N3](https://jlpt-main.neea.cn/) 7月12月考试，提前3个月报名
+4. <font color=orange>[P2]</font>[中口](http://www.shwyky.net/portal/) 6月12月报名 3月9月中旬笔试 通过笔试的两年内报名口试（4次机会）4月10月报名，5月11月口试
+
 ## 2024 
 
 > [To read](../Readings/ToBeRead.md)
@@ -35,7 +45,7 @@
 > 
 > 11、12 try some interview
 
-### C++
+## C++
 
 * <font color=red>[P0]</font>ProcFrameWork
 * CodeSnippets
@@ -47,7 +57,7 @@
   * 编译优化手段
   * CSApp
 
-### Rust
+## Rust
 
 > 一种面向未来的可能性
 
@@ -56,14 +66,14 @@
 * 语言特性深入理解
 * 写三个练手小项目（minigrep、）
 
-### Golang
+## Golang
 
 > 按照团队要求，作为第二开发语言
 
 * 复习 Basic concept
 * go in deep
 
-### Background 高性能编程
+## Background 高性能编程
 
 * kernel code unix
 * 模板元
@@ -75,17 +85,17 @@
 * 广度：AI-GPT 业界TSDB
 * 深度(system design)：调度算法、限流算法、定时器
 
-### 语言
+## 语言
 
 * 英语词汇增强、口语练习，maybe 挑战下中级口译
 * 日语基础，日常口语，年底日语N3考试
 
-### 体质
+## 体质
 
 * 体脂 < 15%
 * 学会自由泳
 
-### Project and Blog ideas
+## Project and Blog ideas
 
 * 长期增强 CodeSnippets
 * C++ ProcFrameWork
@@ -105,7 +115,7 @@
 * <font color=green>[Done]</font> 理解numa的概念
 * <font color=green>[Done]</font> glibc如何完成系统调用
 
-### Learn Stuffs
+## Learn Stuffs
 
 * 概率统计 & 线性代数
 * 金融理论 by Yale   行为经济学

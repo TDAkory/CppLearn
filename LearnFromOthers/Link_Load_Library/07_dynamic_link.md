@@ -398,4 +398,55 @@ typedef struct
 
 > 略，后补一个blog
 
-## 显式运行时链接
+## 显式运行时链接(Explicit Run-time Linking)
+
+一般的共享对象不需要任何修改就可以进行运行时装载，这种共享对象往往被叫做动态装载库（Dynamic Loading Library）
+
+动态库和一般共享对象在文件格式上没有区别。
+
+主要区别是共享对象是由动态链接器在程序启动之前负责装载和链接的；动态库的装载则是通过一系列由动态链接器提供的API实现的。
+
+> /lib/libdl.so.2  <dlfcn.h> `dlopen` `dlsym` `dlerror` `dlclose`
+
+### [`dlopen`](https://man7.org/linux/man-pages/man3/dlopen.3.html)
+
+```c
+void *dlopen(const char *filename, int flags);
+```
+
+第一个参数是被加载动态库的路径，如果这个路径是绝对路径，则该函数将会尝试直接打开该动态库;如果是相对路径，那么dlopen()会尝试在以一定的顺序去查找该动态库文件:
+
+1. 查找有环境变量`LD_LIBRARY_PATH` 指定的一系列目录
+2. 查找由`/etc/ld.so.cache` 里面所指定的共享库路径。
+3. `/lib`、`/ust/lib`
+
+如果filename是NULL，则会返回主函数的句柄，即可获得全局的符号表。这时可以获取到任一符号并执行它们（类似反射）
+
+当被加载的模块存在依赖时，如A依赖B，程序员需要手动控制加载顺序，先加载B，再加载A
+
+`dlopen`也会在完成加载之后，执行`.init`段代码，完成执行之后返回。
+
+### [`dlsym`](https://man7.org/linux/man-pages/man3/dlsym.3.html)
+
+```c
+void *dlsym(void *restrict handle, const char *restrict symbol);
+```
+
+通过动态库句柄查找符号:
+
+1. 如果找到响应的符号，则返回对应符号的值，没有找到则返回NULL
+   1. 查找函数，返回函数地址
+   2. 查找变量，返回变量地址
+   3. 查找常量，返回常量的值
+2. 如果查找的符号的值本身是NULL或0，则通过dlerror判断是否是查找失败
+
+符号优先级：
+
+1. 如果在全局符号表中进行查找，由于全局符号表使用的是装载顺序，所以dlsym查找的顺序也是装载顺序（即先装入的符号优先）
+2. 如果是在通过dlopen打开的共享对象中查找，则采用依赖顺序，即以打开的共享对象为根节点，对它所有依赖的共享对象进行广度优先遍历
+
+### [`dlerror`](https://linux.die.net/man/3/dlclose)
+
+### [`dlclose`](https://linux.die.net/man/3/dlclose)
+
+系统维持一个引用计数器，来决定真正卸载的时机

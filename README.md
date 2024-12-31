@@ -64,3 +64,9 @@ description: c++ world
 - [Using std::sort() without prefix "std" and also without "using namespace std;" compiles successfully](https://stackoverflow.com/questions/41491995/using-stdsort-without-prefix-std-and-also-without-using-namespace-std-c)
 
 - [2022 年度 C++](https://mp.weixin.qq.com/s/16zJpl4ofVrS9Guo0nhF3Q)
+- [C++ 之父 2024 年末重磅演讲 | 重新认识 C++：跨世纪的现代演进](https://mp.weixin.qq.com/s/TDy1LCg30htstukxjMItow)
+
+## DevContainerTemplate
+
+- [cpp-devbox](https://github.com/jakoch/cpp-devbox/tree/main)
+- [cpp-dev-sandbox](https://github.com/vitaliy-ostapchuk93/cpp-dev-sandbox?tab=readme-ov-file)

@@ -554,5 +554,4 @@ void RunInThread(const BenchmarkInstance* b, IterationCount iters,
   }
   manager->NotifyThreadComplete();
 }
-
 ```
