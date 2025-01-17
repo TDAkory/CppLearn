@@ -28,6 +28,7 @@
     - [blog topics](#blog-topics)
   - [语言](#语言)
   - [体质](#体质)
+  - [Overall Goals](#overall-goals)
 
 ## Yearly Goal
 
@@ -124,7 +125,9 @@
 #### 高性能编程技巧
 
 - [C++ 高性能编程（全）(译)](https://www.cnblogs.com/apachecn/p/18172912)
-- hotpatch：方法，demo
+- [Abseil C++ Tips of Week](https://abseil.io/tips/)
+- [Abseil C++ Performance Guide](https://abseil.io/fast/)
+- hotpatch: 方法、demo
 - 模板元
 - coroutine
 - executor
@@ -173,3 +176,10 @@
 
 - 体脂 < 15%
 - 学会自由泳
+
+## Overall Goals
+
+* 技术能力：增强技术深度，有专精的技术领域，能够主导难题攻关；扩展技术广度，对相关的方面有较为全面的认识
+* 领导力：可以清晰把握架构&演进方向，评估技术复杂度并合理拆解任务（组织团队高效开发）。追踪业界前沿进展、理解内部现状，能够识别差距并指定中长期技术规划
+* 影响力：构建相关领域的影响力、内部外部的技术分享和输出、（相关领域的人才培养）
+* 更进一步（行业专家）：深入研究、独到见解

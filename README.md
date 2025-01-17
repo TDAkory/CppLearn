@@ -30,6 +30,9 @@ description: c++ world
 
 ## Blog & BroadCast
 
+- [Abseil C++ Tips of Week](https://abseil.io/tips/)
+- [Abseil C++ Performance Guide](https://abseil.io/fast/)
+
 - [Fluent C++](https://www.fluentcpp.com/)
 - [Arthur O’Dwyer](https://quuxplusone.github.io/blog/)
 - [Sutter’s Mill](https://herbsutter.com/)

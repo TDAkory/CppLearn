@@ -2,8 +2,6 @@
 
 ## demo
 
-> https://godbolt.org/z/boov3v8WG
-
 ```cpp
 #include <iostream>
 #include <algorithm>
