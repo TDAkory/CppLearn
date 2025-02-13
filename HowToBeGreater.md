@@ -1,9 +1,9 @@
-# How to be Greater (2024)
+# How to be Greater
 
 > 分析补充个人技能栈，并记录需要学习的内容和学习进度
 > <font color=red>[P0]</font>   <font color=orange>[P1]</font>   <font color=brown>[P2]</font>  <font color=green>[Done]</font>
 
-- [How to be Greater (2024)](#how-to-be-greater-2024)
+- [How to be Greater](#how-to-be-greater)
   - [Yearly Goal](#yearly-goal)
     - [2025](#2025)
     - [2024](#2024)
@@ -36,8 +36,8 @@
 
 **需要完成的一些事情：**
 
-1. <font color=red>[P0]</font>[软考](https://www.ruankao.org.cn/guide) 系统架构设计师 5.25~5.28  11.9~12
-2. <font color=red>[P0]</font>一轮interview，重新认识市场
+1. <font color=red>[P0]</font>[软考](https://www.ruankao.org.cn/guide) 系统架构设计师 （3月底报名）5.25~5.28  （9月报名）11.9~12
+2. <font color=red>[P0]</font>金三银四 一轮interview，重新认识市场
 3. <font color=orange>[P1]</font>[日语 N3](https://jlpt-main.neea.cn/) 7月12月考试，提前3个月报名
 4. <font color=orange>[P2]</font>[中口](http://www.shwyky.net/portal/) 6月12月报名 3月9月中旬笔试 通过笔试的两年内报名口试（4次机会）4月10月报名，5月11月口试
 
@@ -58,8 +58,8 @@
 
 ### OS
 
-- `深入理解计算机系统` CSAPP
-- `程序员的自我修养-链接、装载与库`
+- <font color=red>[P0]</font>`深入理解计算机系统` CSAPP
+- <font color=red>[P0]</font>`程序员的自我修养-链接、装载与库`
 - `TCP\IP`
 
 ### Linux
@@ -72,7 +72,7 @@
 ### Algorithm & Data Structure
 
 - 复习 Algorithm & Data Structure
-- 学习 System Design : System Desing 101
+- <font color=red>[P0]</font>学习 System Design : System Desing 101
 
 ## Learn From The Best
 
@@ -86,22 +86,25 @@
 
 ## Learn From Framwork
 
-- leveldb 完成源码解析的笔记
-- boost   学习一下异步io的源码
-- folly   学习一优化的数据结构
+- <font color=red>[P0]</font> leveldb 完成源码解析的笔记
+- <font color=orange>[P1]</font> boost   学习异步io的源码
+- <font color=orange>[P1]</font> folly   学习优化的数据结构
+- <font color=orange>[P1]</font> abseil 学习优化的数据机构
+- <font color=red>[P0]</font> influxdb 学习数据类型、文件结构、存储排布
 
 ## Domain Knowledge
 
 - 分布式系统
 - 云原生（加深理解）
-- 压缩算法
+- **压缩算法**
 - Topics: K8s OLAP-Engine
 - 广度：AI-GPT 业界TSDB
 
 
 ### Storage
 
-- `数据库系统内幕`
+- <font color=green>[Done]</font> `数据库系统内幕`
+- <font color=red>[P0]</font> `数据密集型应用系统设计`
 - `PingCap awesome database learning from github`
 
 ### Observebility
