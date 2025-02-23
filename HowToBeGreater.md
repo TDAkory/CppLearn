@@ -11,11 +11,11 @@
     - [OS](#os)
     - [Linux](#linux)
     - [Algorithm \& Data Structure](#algorithm--data-structure)
-  - [Learn From The Best](#learn-from-the-best)
-  - [Learn From Framwork](#learn-from-framwork)
-  - [Domain Knowledge](#domain-knowledge)
-    - [Storage](#storage)
-    - [Observebility](#observebility)
+    - [Learn From The Best](#learn-from-the-best)
+    - [Learn From Framwork](#learn-from-framwork)
+    - [Domain Knowledge](#domain-knowledge)
+      - [Storage](#storage)
+      - [Observebility](#observebility)
   - [Languages](#languages)
     - [C++](#c)
       - [阅读和笔记](#阅读和笔记)
@@ -41,10 +41,14 @@
 3. <font color=orange>[P1]</font>[日语 N3](https://jlpt-main.neea.cn/) 7月12月考试，提前3个月报名
 4. <font color=orange>[P2]</font>[中口](http://www.shwyky.net/portal/) 6月12月报名 3月9月中旬笔试 通过笔试的两年内报名口试（4次机会）4月10月报名，5月11月口试
 
-**Top Priority Tasks**
+**Top Priority Tasks Q1**
 
 1. <font color=red>[P0]</font> CSAPP 跟着公开课再学一遍
 2. <font color=red>[P0]</font> 内存连贯性和缓存一致性导论
+3. [软件设计的哲学-中译](https://cactus-proj.github.io/A-Philosophy-of-Software-Design-zh/)
+4. <font color=red>[P0]</font>`程序员的自我修养-链接、装载与库`
+5. <font color=red>[P0]</font> `数据密集型应用系统设计`
+6. [C++ 高性能编程（全）(译)](https://www.cnblogs.com/apachecn/p/18172912)
 
 ### 2024
 
@@ -74,7 +78,7 @@
 - 复习 Algorithm & Data Structure
 - <font color=red>[P0]</font>学习 System Design : System Desing 101
 
-## Learn From The Best
+### Learn From The Best
 
 - [Textbooks](https://github.com/kaitoukito/Computer-Science-Textbooks)
 - CppCons 2023 2024 学习&记录
@@ -84,7 +88,7 @@
 - MIT6.824
 - MIT6.712
 
-## Learn From Framwork
+### Learn From Framwork
 
 - <font color=red>[P0]</font> leveldb 完成源码解析的笔记
 - <font color=orange>[P1]</font> boost   学习异步io的源码
@@ -92,7 +96,7 @@
 - <font color=orange>[P1]</font> abseil 学习优化的数据机构
 - <font color=red>[P0]</font> influxdb 学习数据类型、文件结构、存储排布
 
-## Domain Knowledge
+### Domain Knowledge
 
 - 分布式系统
 - 云原生（加深理解）
@@ -101,13 +105,13 @@
 - 广度：AI-GPT 业界TSDB
 
 
-### Storage
+#### Storage
 
-- <font color=green>[Done]</font> `数据库系统内幕`
+- ~~<font color=green>[Done]</font> `数据库系统内幕`~~
 - <font color=red>[P0]</font> `数据密集型应用系统设计`
 - `PingCap awesome database learning from github`
 
-### Observebility
+#### Observebility
 
 ## Languages
 
