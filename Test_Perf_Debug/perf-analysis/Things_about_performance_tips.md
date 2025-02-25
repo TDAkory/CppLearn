@@ -1,0 +1,9 @@
+# Tips about performance
+
+* Prefer writing clear, idiomatic code whenever possible. It is not only easier to read and debug, but in the long run, also easier for the compiler to optimize.
+* Whenever you find a low-level performance optimization that requires fancy bit-twiddling, intrinsics code, or inline assembly, consider first whether this is something the compiler could do.
+* If the code is hot, and the optimization is not something the compiler can be taught to perform, then: prefer portable code, possibly using [hwy](https://github.com/google/highway/tree/master/hwy) to generate efficient and portable vector code, failing that use intrinsics, failing that use inline asm (this should be extremely rare). Avoiding inline assembly makes the code more portable across microarchitectures.
+* Keep the “naive” code you are replacing. If you are optimizing ComputeFoo, consider keeping the simple implementation in a REFERENCE_ComputeFoo function. This makes it easy to write a unit-test for the new implementation that ensures the two functions are equivalent; it makes it easier to write a microbenchmark; and it makes it easier to revert to the reference code when (not if) the machine-dependent implementation outlives its usefulness.
+* Include a microbenchmark with your change.
+* When [designing or changing configuration knobs](https://abseil.io/fast/52), ensure that the choices stay optimal over time. Frequently, overriding the default can lead to suboptimal behavior when the default changes by pinning things in a worse-than-out-of-the-box state. Designing the knobs [in terms of the outcome](https://www.youtube.com/watch?v=J6SNO5o9ADg&t=1521s) rather than specific behavior aspects can make such overrides easier (or even possible) to evolve.
+* 

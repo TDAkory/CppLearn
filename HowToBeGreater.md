@@ -18,7 +18,6 @@
       - [Observebility](#observebility)
   - [Languages](#languages)
     - [C++](#c)
-      - [阅读和笔记](#阅读和笔记)
       - [高性能编程技巧](#高性能编程技巧)
       - [C++ Topics](#c-topics)
     - [Rust](#rust)
@@ -43,12 +42,14 @@
 
 **Top Priority Tasks Q1**
 
-1. <font color=red>[P0]</font> CSAPP 跟着公开课再学一遍
-2. <font color=red>[P0]</font> 内存连贯性和缓存一致性导论
-3. [软件设计的哲学-中译](https://cactus-proj.github.io/A-Philosophy-of-Software-Design-zh/)
-4. <font color=red>[P0]</font>`程序员的自我修养-链接、装载与库`
-5. <font color=red>[P0]</font> `数据密集型应用系统设计`
-6. [C++ 高性能编程（全）(译)](https://www.cnblogs.com/apachecn/p/18172912)
+1. <font color=red>[P0]</font> [Abseil C++ Tips of Week](https://abseil.io/tips/)
+2. <font color=red>[P0]</font> CSAPP 跟着公开课再学一遍
+3. <font color=red>[P0]</font> 内存连贯性和缓存一致性导论
+4. [软件设计的哲学-中译](https://cactus-proj.github.io/A-Philosophy-of-Software-Design-zh/)
+5. <font color=green>[Done]</font> `程序员的自我修养-链接、装载与库`
+6. <font color=red>[P0]</font> `数据密集型应用系统设计`
+7. [C++ 高性能编程（全）(译)](https://www.cnblogs.com/apachecn/p/18172912)
+8. <font color=red>[P0]</font> 学习 System Design : System Desing 101
 
 ### 2024
 
@@ -62,9 +63,10 @@
 
 ### OS
 
-- <font color=red>[P0]</font>`深入理解计算机系统` CSAPP
-- <font color=red>[P0]</font>`程序员的自我修养-链接、装载与库`
+- `深入理解计算机系统` CSAPP
+- `程序员的自我修养-链接、装载与库`
 - `TCP\IP`
+- `编译原理`
 
 ### Linux
 
@@ -76,7 +78,7 @@
 ### Algorithm & Data Structure
 
 - 复习 Algorithm & Data Structure
-- <font color=red>[P0]</font>学习 System Design : System Desing 101
+- 学习 System Design : System Desing 101
 
 ### Learn From The Best
 
@@ -84,7 +86,6 @@
 - CppCons 2023 2024 学习&记录
 - C++ Weekly from Jason
 - 概率统计 & 线性代数
-- 金融理论 by Yale   行为经济学
 - MIT6.824
 - MIT6.712
 
@@ -107,7 +108,7 @@
 
 #### Storage
 
-- ~~<font color=green>[Done]</font> `数据库系统内幕`~~
+- <font color=green>[Done]</font> `数据库系统内幕`
 - <font color=red>[P0]</font> `数据密集型应用系统设计`
 - `PingCap awesome database learning from github`
 
@@ -117,17 +118,10 @@
 
 ### C++
 
-- <font color=red>[P0]</font>ProcFrameWork
+- <font color=red>[P0]</font> ProcFrameWork
 - CodeSnippets
 - C++ 20 23 26 blogs refs cppconf
 - 编译器 clang(thinLTO PGO FDO) llvm(basic source code，理解框架)
-  
-#### 阅读和笔记
-
-- 编译原理
-- <font color=red>[P0]</font> 程序员的自我修养
-- 编译优化手段
-- CSApp
   
 #### 高性能编程技巧
 
@@ -170,6 +164,7 @@
 - C++ 反射框架
 - C++ 超时工具
 - a simple coroutine framework
+- a simple c++ runtime lib
 - Rust leveldb-rs
 
 ### [blog topics](../BlogSrc/README.md)

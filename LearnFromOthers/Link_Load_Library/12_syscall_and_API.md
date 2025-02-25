@@ -119,15 +119,48 @@ _start:
 
 ### linux新型系统调用机制
 
-`linux-gate.so.1` 是 Linux 系统中一个特殊的虚拟共享库，它在用户空间和内核空间之间起到了桥梁的作用，主要用于加速系统调用的执行。总是被加载在 0xffffe000 地址上，这个虚拟文件的大小是 4096 字节，因为其在任何进程中的位置都相同，可以用如下方式导出：
+```shell
+$ ldd /bin/ls
+	linux-vdso.so.1 (0x00007fffbfdf2000)
+	libselinux.so.1 => /lib/x86_64-linux-gnu/libselinux.so.1 (0x00007efd1f175000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007efd1efb5000)
+	libpcre.so.3 => /lib/x86_64-linux-gnu/libpcre.so.3 (0x00007efd1ef41000)
+	libdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x00007efd1ef3c000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007efd1f3cd000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007efd1ef1b000)
+```
+
+`linux-gate.so.1` 即`linux-vdso.so.1` 是 Linux 系统中一个特殊的虚拟共享库(Virtual Dynamic Shared Library)，它在用户空间和内核空间之间起到了桥梁的作用，主要用于加速系统调用的执行。总是被加载在 0xffffe000 地址上，这个虚拟文件的大小是 4096 字节，因为其在任何进程中的位置都相同，可以用如下方式导出：
 
 ```shell
-dd if=/proc/self/mem of=linux-gate.sdo bs=4096 skip=1048574 count=1
+dd if=/proc/self/mem of=linux-gate.sdo bs=4096 skip=${offset in decimal} count=1
 ```
+
+下面是通过运行一个ping程序，然后`sudo dd if=/proc/1215801/mem of=linux-gate.dso bs=4096 skip=34357411259 count=1`，得到的`linux-gate.sdo`:
+
+```shell
+~> objdump -T linux-gate.dso
+
+linux-gate.dso:     file format elf64-x86-64
+
+DYNAMIC SYMBOL TABLE:
+0000000000000900  w   DF .text	00000000000000a8  LINUX_2.6   clock_gettime
+0000000000000860 g    DF .text	0000000000000087  LINUX_2.6   __vdso_gettimeofday
+00000000000009b0  w   DF .text	0000000000000005  LINUX_2.6   clock_getres
+00000000000009b0 g    DF .text	0000000000000005  LINUX_2.6   __vdso_clock_getres
+0000000000000860  w   DF .text	0000000000000087  LINUX_2.6   gettimeofday
+00000000000008f0 g    DF .text	0000000000000010  LINUX_2.6   __vdso_time
+00000000000008f0  w   DF .text	0000000000000010  LINUX_2.6   time
+0000000000000900 g    DF .text	00000000000000a8  LINUX_2.6   __vdso_clock_gettime
+0000000000000000 g    DO *ABS*	0000000000000000  LINUX_2.6   LINUX_2.6
+00000000000009c0 g    DF .text	000000000000002a  LINUX_2.6   __vdso_getcpu
+00000000000009c0  w   DF .text	000000000000002a  LINUX_2.6   getcpu
+```
+
+看起来与书中描述似乎不一致，这是因为：在较新的 Linux 内核版本中，`__kernel_vsyscall` 的使用方式可能发生了变化。例如，某些系统调用（如 `gettimeofday`、`time` 和 `getcpu`）可能通过 `vDSO` 机制实现，而其他系统调用则直接使用 `syscall` 指令。
 
 当用户空间的应用程序发起系统调用时，`linux-gate.so.1` 负责将调用请求传递给内核，并将执行结果返回给用户空间。
 
 在 x86 架构中，`linux-gate.so.1` 提供了虚拟系统调用的支持，例如 `__kernel_vsyscall`、`__kernel_sigreturn` 和 `__kernel_rt_sigreturn` 等函数的入口点。
 
 `linux-gate.so.1` 被映射到一个固定的内存地址（例如在 32 位系统中通常是 `0xffffe000`），这使得所有进程都能以相同的方式访问它。
-
