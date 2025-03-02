@@ -61,6 +61,15 @@ std::deque<std::string> d = absl::StrSplit("a,b,c", ',');
 std::map<std::string, std::string> m = absl::StrSplit("a,1,b,2,c,3", ',');
 ```
 
+## String format
+
+* absl::Substitute
+* std::format
+
+## String join
+
+`absl::StrJoin()`
+
 ## Ref
 
 * [Tip of the Week #3: String Concatenation and operator+ vs. StrCat()](https://abseil.io/tips/3)

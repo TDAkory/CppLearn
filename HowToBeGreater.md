@@ -94,7 +94,7 @@
 - <font color=red>[P0]</font> leveldb 完成源码解析的笔记
 - <font color=orange>[P1]</font> boost   学习异步io的源码
 - <font color=orange>[P1]</font> folly   学习优化的数据结构
-- <font color=orange>[P1]</font> abseil 学习优化的数据机构
+- <font color=orange>[P1]</font> abseil 学习优化的数据结构
 - <font color=red>[P0]</font> influxdb 学习数据类型、文件结构、存储排布
 
 ### Domain Knowledge
