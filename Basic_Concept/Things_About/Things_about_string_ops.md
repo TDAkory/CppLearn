@@ -33,6 +33,34 @@ std::string foobarbaz = std::move(temp) + baz;
 
 ## String split
 
+use `absl::StrSplit()`, powerful
+
+```cpp
+// Splits on commas. Stores in vector of string_view (no copies).
+std::vector<absl::string_view> v = absl::StrSplit("a,b,c", ',');
+
+// Splits on commas. Stores in vector of string (data copied once).
+std::vector<std::string> v = absl::StrSplit("a,b,c", ',');
+
+// Splits on literal string "=>" (not either of "=" or ">")
+std::vector<absl::string_view> v = absl::StrSplit("a=>b=>c", "=>");
+
+// Splits on any of the given characters (',' or ';')
+using absl::ByAnyChar;
+std::vector<std::string> v = absl::StrSplit("a,b;c", ByAnyChar(",;"));
+
+// Stores in various containers (also works w/ absl::string_view)
+std::set<std::string> s = absl::StrSplit("a,b,c", ',');
+std::multiset<std::string> s = absl::StrSplit("a,b,c", ',');
+std::list<std::string> li = absl::StrSplit("a,b,c", ',');
+
+// Equiv. to the mythical SplitStringViewToDequeOfStringAllowEmpty()
+std::deque<std::string> d = absl::StrSplit("a,b,c", ',');
+
+// Yields "a"->"1", "b"->"2", "c"->"3"
+std::map<std::string, std::string> m = absl::StrSplit("a,1,b,2,c,3", ',');
+```
+
 ## Ref
 
 * [Tip of the Week #3: String Concatenation and operator+ vs. StrCat()](https://abseil.io/tips/3)
