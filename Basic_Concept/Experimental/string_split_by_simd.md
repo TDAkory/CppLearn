@@ -1,6 +1,6 @@
 # String split by SIMD
 
-对字符串进行拆分是一个比较普遍的需求，`C++` 标准库虽然没有直接提供类似 `Python` 或 `Java` 中的 `split` 函数，但利用标准库函数或三方库的支持，仍然可以实现这个功能。
+对字符串进行拆分是一个比较普遍的需求，`C++` 标准库虽然没有直接提供类似 `Python` 或 `Java` 中的 `split` 函数，但利用标准库函数，仍然可以实现这个功能。
 
 以下是几种常见实现：
 
@@ -9,7 +9,7 @@
 #include <vector>
 #include <string>
 
-std::vector<std::string> split(const std::string& str, char delimiter) {
+std::vector<std::string> SplitByFind(const std::string& str, char delimiter) {
     std::vector<std::string> tokens;
     size_t start = 0;
     size_t end = str.find(delimiter);
@@ -32,7 +32,7 @@ std::vector<std::string> split(const std::string& str, char delimiter) {
 #include <vector>
 #include <string>
 
-std::vector<std::string> split(const std::string& str, char delimiter) {
+std::vector<std::string> SplitByGetline(const std::string& str, char delimiter) {
     std::vector<std::string> tokens;
     std::istringstream stream(str);
     std::string token;
@@ -49,7 +49,7 @@ std::vector<std::string> split(const std::string& str, char delimiter) {
 #include <vector>
 #include <string>
 
-std::vector<std::string> split(const std::string& s, char delimiter) {
+std::vector<std::string> SplitC20(const std::string& s, char delimiter) {
     auto splitView = s | std::views::split(delimiter);
     std::vector<std::string> result;
     for (auto&& part : splitView) {
@@ -128,4 +128,4 @@ std::vector<std::string> splitStringSSE(const std::string& input, char delimiter
 }
 ```
 
-此外 boost abseil
+上述demo的[godbolt](https://godbolt.org/z/cYzj5v63o)
