@@ -4,8 +4,9 @@
 
 以下是几种常见实现：
 
+基于 `std::string::find` 和 `std::string::substr`
+
 ```cpp
-// 基于 std::string::find 和 std::string::substr
 #include <vector>
 #include <string>
 
@@ -25,8 +26,9 @@ std::vector<std::string> SplitByFind(const std::string& str, char delimiter) {
 }
 ```
 
+基于 `std::stringstream` 和 `getline`
+
 ```cpp
-// 基于 std::stringstream 和 getline
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -43,8 +45,9 @@ std::vector<std::string> SplitByGetline(const std::string& str, char delimiter) 
 }
 ```
 
+利用 `C++20` 的 `std::ranges` 和 `std::views`
+
 ```cpp
-// C++20 的 std::ranges 和 std::views
 #include <ranges>
 #include <vector>
 #include <string>
@@ -59,8 +62,9 @@ std::vector<std::string> SplitC20(const std::string& s, char delimiter) {
 }
 ```
 
+基于`SSE` `SIMD`指令，在性能敏感场景使用
+
 ```cpp
-// 基于SSE SIMD指令
 #include <iostream>
 #include <vector>
 #include <bitset>
@@ -128,4 +132,10 @@ std::vector<std::string> splitStringSSE(const std::string& input, char delimiter
 }
 ```
 
-上述demo的[godbolt](https://godbolt.org/z/cYzj5v63o)
+上述demo的[godbolt](https://godbolt.org/z/cYzj5v63o)。
+
+此外：
+
+`Boost` 提供了 `boost::split` 和 `boost::split_regex` 两个函数用于分割字符串。
+
+`Abseil` 提供了 `absl::StrSplit` 函数用于分割字符串，并支持多种分隔符。
