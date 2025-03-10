@@ -1,6 +1,6 @@
 # 数据类型定义
 
-![leveldb 基本框架](https://raw.githubusercontent.com/TDAkory/ImageResources/main/img/leveldb.png)
+![leveldb 基本框架](https://raw.githubusercontent.com/TDAkory/ImageResources/master/img/leveldb.png)
 
 leveldb是一种基于operation log的文件系统，是Log-Structured-Merge Tree的典型实现。LSM源自Ousterhout和Rosenblum在1991年发表的经典论文<<The Design and Implementation of a Log-Structured File System >>。
 ## 一些约定

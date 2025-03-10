@@ -144,7 +144,7 @@ template<typename _Yp, typename _Yp2 = typename remove_cv<_Yp>::type>
 
 首先shared_ptr大概包含以下数据单元：指向data field的element_type *类型的指针，以及一个间接的包含了_M_use_count，_M_weak_count的__shared_count（在某些情况下它可能还包含一个deletor对象和一个allocator对象，这一区域被称为control block，__shared_count中包含一个指向这个control block的指针）。
 
-![std::shared_ptr的内存结构](https://raw.githubusercontent.com/TDAkory/ImageResources/main/img/20220530222709.png)
+![std::shared_ptr的内存结构](https://raw.githubusercontent.com/TDAkory/ImageResources/master/img/20220530222709.png)
 
 在__shared_ptr里，会通过萃取技术为_Sp_counted_ptr_inplace开辟出一块内存，其中_Sp_counted_ptr_inplace唯一的数据成员是_Impl类型的_M_impl。下面来看_Sp_counted_ptr_inplace中直接以及间接包含的信息：
 

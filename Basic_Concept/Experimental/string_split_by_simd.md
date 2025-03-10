@@ -134,6 +134,50 @@ std::vector<std::string> splitStringSSE(const std::string& input, char delimiter
 
 上述demo的[godbolt](https://godbolt.org/z/cYzj5v63o)。
 
+同时，在`Quick C++ Benchmark`，也进行了一个简单的性能测试 
+
+```cpp
+static std::string g_origin = "hellp^world^there^are^string^util_functions^for^doSomeSplit^123xcv8909()^cmodf912";
+static char g_delimiter = '^';
+
+static void BM_SPLITBYFIND(benchmark::State &state) {
+    for (auto _ : state) {
+        auto ret = SplitByFind(g_origin, g_delimiter);
+        benchmark::DoNotOptimize(ret);
+    }
+}
+
+static void BM_SPLITBYGETLINE(benchmark::State &state) {
+    for (auto _ : state) {
+        auto ret = SplitByGetline(g_origin, g_delimiter);
+        benchmark::DoNotOptimize(ret);
+    }
+}
+
+static void BM_SPLITC20(benchmark::State &state) {
+    for (auto _ : state) {
+        auto ret = SplitC20(g_origin, g_delimiter);
+        benchmark::DoNotOptimize(ret);
+    }
+}
+
+static void BM_SPLITSIMD(benchmark::State &state) {
+    for (auto _ : state) {
+        auto ret = SplitBySIMD(g_origin, g_delimiter);
+        benchmark::DoNotOptimize(ret);
+    }
+}
+
+BENCHMARK(BM_SPLITBYFIND);
+BENCHMARK(BM_SPLITBYGETLINE);
+BENCHMARK(BM_SPLITC20);
+BENCHMARK(BM_SPLITSIMD);
+```
+
+几种实现的性能对比如下
+
+![string split性能对比](https://raw.githubusercontent.com/TDAkory/ImageResources/master/img/CppLearn/string_split_benchmark.jpg)
+
 此外：
 
 `Boost` 提供了 `boost::split` 和 `boost::split_regex` 两个函数用于分割字符串。

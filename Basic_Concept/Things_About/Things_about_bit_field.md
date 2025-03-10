@@ -21,7 +21,7 @@ struct Date {
 };
 ```
 
-![BitField Above](https://raw.githubusercontent.com/TDAkory/ImageResources/main/img/bitfield.png)
+![BitField Above](https://raw.githubusercontent.com/TDAkory/ImageResources/master/img/bitfield.png)
 
 nYear 长度为 8 位，这会溢出声明类型 unsigned short的单词边界。 因此，它从新 unsigned short的开头开始。 不需要所有位字段都适合基础类型的一个对象;根据声明中请求的位数分配新的存储单位。
 

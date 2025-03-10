@@ -461,7 +461,7 @@ gcc -E展开后
 
 很精巧
 
-![TAILQ内存结构](https://raw.githubusercontent.com/TDAkory/ImageResources/main/img/20220505114222.png)
+![TAILQ内存结构](https://raw.githubusercontent.com/TDAkory/ImageResources/master/img/20220505114222.png)
 
 ```cpp
 //p = TAILQ_LAST(&queue_head, queue_head_t);
