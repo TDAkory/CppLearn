@@ -16,11 +16,11 @@
 
 **在函数签名中使用 `auto`**
 
-| 显式类型的传统语法 | 使用 `auto` 的新语法 |
-|--------------------|----------------------|
-| `int val() const { return m_; }` | `auto val() const { return m_; }` |
+| 显式类型的传统语法                       | 使用 `auto` 的新语法                |
+| ---------------------------------------- | ----------------------------------- |
+| `int val() const { return m_; }`         | `auto val() const { return m_; }`   |
 | `const int& cref() const { return m_; }` | `auto& cref() const { return m_; }` |
-| `int& mref() { return m_; }` | `auto& mref() { return m_; }` |
+| `int& mref() { return m_; }`             | `auto& mref() { return m_; }`       |
 
 **使用 `decltype(auto)` 进行返回类型转发**
 
@@ -381,3 +381,29 @@ auto lambda = []<typename T>(T x, T y) {
 **MicroBenchmark的陷阱**：编译器可能会以不同于在完整程序中优化的方式来优化孤立的代码；在基准测试中未使用的返回值可能会使编译器删除我们试图测量的函数；在微基准测试中提供的静态测试数据可能会使编译器在优化代码时获得不切实际的优势（比如确定的循环次数导致向量化优化）
 
 ## 数据结构
+
+缓存、缓存延迟、时间局部性、空间局部性、缓存抖动
+
+**序列容器**
+
+`std::vector`使用`std::move_if_noexcept`来确定对象是应该被复制还是移动。
+
+作为动态大小向量的替代，标准库还提供了一个名为`std::array`的固定大小版本，它通过使用堆栈而不是自由存储来管理其元素。数组的大小是在编译时指定的模板参数，这意味着大小和类型元素成为具体类型的一部分。
+
+`std::deque`通常实现为一组固定大小的数组，这使得可以在常数时间内通过它们的索引访问元素。
+
+`std::list`是一个双向链表，意味着每个元素都有一个指向下一个元素和一个指向前一个元素的链接。这使得可以向前和向后遍历列表。还有一个名为`std::forward_list`的单向链表。
+
+**关联容器**
+
+有序关联容器：基于树，std::set、std::map、std::multiset和std::multimap。
+
+无序关联容器：基于哈希表，std::unordered_set、std::unordered_map、std::unordered_multiset和std::unordered_multimap
+
+**容器适配器**
+
+标准库中有三种容器适配器：std::stack、std::queue和std::priority_queue。容器适配器与序列容器和关联容器非常不同，因为它们代表可以由底层序列容器实现的抽象数据类型。例如，堆栈是一个后进先出（LIFO）数据结构，支持在堆栈顶部进行推送和弹出，可以使用vector、list、deque或任何其他支持back()、push_back()和pop_back()的自定义序列容器来实现。队列也是如此，它是一个先进先出（FIFO）数据结构，以及priority_queue。
+
+**视图**
+
+C++17 中的std::string_view和 C++20 中引入的std::span。
