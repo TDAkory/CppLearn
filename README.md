@@ -22,6 +22,7 @@ description: c++ world
 - [学习路线参考一](https://leetcode-cn.com/circle/discuss/KyGwCS/)
 - [学习路线参考二](https://xie.infoq.cn/article/ee8691bcbd63d00972a6cad02)
 - [interview](https://github.com/huihut/interview)
+- [CppBookLists](https://github.com/yuchdev/CppBooks?tab=readme-ov-file)
 
 - [练手program](https://juejin.cn/post/6844903967449694216)
 - [EffectiveModernCppChinese](https://github.com/kelthuzadx/EffectiveModernCppChinese)
