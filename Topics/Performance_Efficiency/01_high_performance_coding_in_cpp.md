@@ -11,7 +11,7 @@
 
 **C++的缺点**：长时间的编译时间和导入库的复杂性（直到 C++20，C++一直依赖于一个过时的导入系统）；缺乏提供的库（C++提供的几乎只是最基本的算法、线程，以及从 C++17 开始的文件系统处理，图形、用户界面、网络、线程、资源处理等只能依赖外部库）
 
-## 基本C++技术
+## 2. 基本C++技术
 
 ### `auto`自动类型推到
 
@@ -363,7 +363,7 @@ auto lambda = []<typename T>(T x, T y) {
 };
 ```
 
-## 分析和测量性能
+## 3. 分析和测量性能
 
 **摊销时间复杂度**：摊销时间复杂度关注的是一系列操作的总时间，然后将其平均分配到每个操作上。即使某些操作的时间复杂度较高，只要这些操作的发生频率较低，整体平均性能仍然可以很好。
 
@@ -381,7 +381,7 @@ auto lambda = []<typename T>(T x, T y) {
 
 **MicroBenchmark的陷阱**：编译器可能会以不同于在完整程序中优化的方式来优化孤立的代码；在基准测试中未使用的返回值可能会使编译器删除我们试图测量的函数；在微基准测试中提供的静态测试数据可能会使编译器在优化代码时获得不切实际的优势（比如确定的循环次数导致向量化优化）
 
-## 数据结构
+## 4. 数据结构
 
 缓存、缓存延迟、时间局部性、空间局部性、缓存抖动
 
@@ -430,7 +430,7 @@ C++17 中的`std::string_view`和 C++20 中引入的`std::span`。
 * 容易出错：由于需要手动管理多个数组的索引，容易出现索引不一致的问题。例如，在删除或插入元素时，如果只修改了部分数组的索引，就会导致数据不一致。
 * 扩展性有限：当数据的结构变得复杂时，并行数组很难进行扩展。例如，如果需要处理嵌套的数据结构或复杂的关系，使用并行数组会变得非常困难。
 
-## 算法
+## 5. 算法
 
 C++20 通过引入 Ranges 库和 C++Concept 的语言特性对算法库进行了重大改变。
 
@@ -462,8 +462,140 @@ concept range = requires(T& t) {
 
 * `std::contiguous_iterator`：与随机访问迭代器相同，但也保证底层数据是连续的内存块，例如`std::string`，`std::vector`，`std::array`，`std::span`和（很少使用的）`std::valarray`
 
-定义在<algorithm>中的标准算法通常具有如下特性：
+### 定义在<algorithm>中的标准算法通常具有如下特性：
 
-* 算法不会改变容器的大小。`std::remove()`或`std::unique()`实际上并不会从容器中删除元素（尽管它们的名字是这样）。相反，它们将应该保留的元素移动到容器的前面，然后返回一个标记，定义了元素的有效范围的新结尾
+#### 算法不会改变容器的大小(Functions from <algorithm> can only modify the elements in a specified range)。
 
-* 带有输出的算法需要预选分配目标容器空间
+`std::remove()`或`std::unique()`实际上并不会从容器中删除元素（尽管它们的名字是这样）。相反，它们将应该保留的元素移动到容器的前面，然后返回一个标记，定义了元素的有效范围的新结尾
+
+#### 带有输出的算法需要预选分配目标容器空间(Algorithms with output require allocated data)
+
+```cpp
+const auto square_func = [](int x) { return x * x; };
+const auto v = std::vector{1, 2, 3, 4};
+auto squared = std::vector<int>{};
+std::ranges::transform(v, squared.begin(), square_func); 
+```
+
+这段代码在逻辑上存在一个潜在问题，具体如下：`std::ranges::transform` 是 C++20 引入的算法，用于对一个范围内的元素进行变换操作，并将结果存储到另一个范围中。它的基本用法是：`std::ranges::transform(input_range, output_iterator, unary_op);`
+
+`squared` 被初始化为一个空的 `std::vector<int>`，因此 `squared.begin()` 是一个无效的迭代器。`std::ranges::transform` 会尝试将结果存储到 `squared` 中，但由于 `squared` 的大小为 0，这会导致未定义行为（Undefined Behavior，UB）。具体表现可能是程序崩溃、数据损坏或其他不可预测的行为。
+
+要解决这个问题，可以采用以下方法之一：
+
+```cpp
+// 在调用 `std::ranges::transform` 之前，为 `squared` 分配足够的空间，使其大小与输入范围 `v` 一致
+squared.resize(v.size());
+std::ranges::transform(v, squared.begin(), square_func);
+```
+
+或者
+
+```cpp
+// 使用 `std::back_inserter` 来自动扩展 `squared` 的大小：
+std::ranges::transform(v, std::back_inserter(squared), square_func);
+```
+
+#### 算法默认使用`operator==()`和`operator()<`
+
+#### 受限算法使用投影
+
+在 C++ 中，**受限算法（Constrained Algorithms）** 和 **投影（Projection）** 是 C++20 标准引入的两个重要概念，它们与范围（Ranges）库紧密相关，用于提高算法的灵活性和表达能力。
+
+受限算法是 C++20 中对标准算法库的改进。在 C++20 之前，标准算法库中的算法（如 `std::sort`、`std::find` 等）通常只接受特定类型的迭代器或容器。然而，C++20 引入了 **范围（Ranges）**，允许算法直接作用于范围对象，而不仅仅是迭代器对。受限算法通过模板约束（Concepts）来限制算法的输入，使其能够更自然地与范围库结合。
+
+以下是一个使用受限算法的示例：
+
+```cpp
+// `std::ranges::sort` 是一个受限算法，它直接作用于 `std::vector<int>` 的范围对象 `v`，而不需要显式地传递迭代器对
+#include <ranges>
+#include <vector>
+#include <iostream>
+
+int main() {
+    std::vector<int> v = {3, 1, 4, 1, 5, 9, 2, 6};
+    std::ranges::sort(v); // 受限算法，直接作用于范围
+    for (const auto& x : v) {
+        std::cout << x << " ";
+    }
+    return 0;
+}
+```
+
+投影是 C++20 范围库中引入的一个概念，用于在算法中对范围的元素进行转换或映射。投影允许算法在处理元素之前，先对元素进行某种操作，从而实现更灵活的算法行为。
+
+投影通常通过一个可调用对象（如函数、lambda 表达式或函数对象）来实现。在调用算法时，可以通过 `std::ranges::views::transform` 或直接传递投影函数来指定投影操作。
+
+以下是一个使用投影的示例：
+
+```cpp
+// `std::views::transform` 是一个投影操作，它将 `v` 中的每个字符串映射为其长度。投影的结果是一个新的范围对象 `lengths`，包含每个字符串的长度
+#include <ranges>
+#include <vector>
+#include <iostream>
+
+int main() {
+    std::vector<std::string> v = {"apple", "banana", "cherry"};
+    auto lengths = v | std::views::transform([](const std::string& s) { return s.length(); });
+    for (const auto& len : lengths) {
+        std::cout << len << " ";
+    }
+    return 0;
+}
+```
+
+投影也可以直接在受限算法中使用。例如，`std::ranges::max` 算法可以通过投影来指定比较的依据：
+
+```cpp
+// `std::ranges::max` 的第三个参数是一个投影函数，用于指定比较的依据（即字符串的长度）
+#include <ranges>
+#include <vector>
+#include <iostream>
+
+int main() {
+    std::vector<std::string> v = {"apple", "banana", "cherry"};
+    auto longest = std::ranges::max(v, {}, [](const std::string& s) { return s.length(); });
+    std::cout << "Longest string: " << longest << std::endl;
+    return 0;
+}
+```
+
+- **受限算法**：通过模板约束和范围支持，使算法更加灵活和类型安全。
+- **投影**：允许在算法中对范围的元素进行转换或映射，从而实现更灵活的算法行为。
+- **结合使用**：受限算法和投影可以结合使用，以实现更强大的功能，提高代码的可读性和灵活性。
+
+#### 算法要求`Move`操作不能抛出异常
+
+#### 算法具有复杂性保证
+
+它们既不分配内存，也不具有高于O(n log n)的时间复杂度
+
+Note the exceptions of `stable_sort()`, `inplace_merge()`, and `stable_partition()`. Many implementations tend to temporarily allocate memory during these operations
+
+#### 算法的性能与C库函数的等价一样好
+
+标准 C 库配备了许多低级算法，包括`memcpy()`、`memmove()`、`memcmp()`和`memset()`。有时人们使用这些函数而不是标准算法库中的等价物。原因是人们倾向于相信 C 库函数更快，因此接受类型安全的折衷。
+
+这对于现代标准库实现来说是不正确的；等价算法`std::copy()`、`std::equal()`和`std::fill()`在可能的情况下会使用这些低级 C 函数；因此，它们既提供性能又提供类型安全。
+
+当然，也许会有例外情况，C++编译器无法检测到可以安全地使用低级 C 函数的情况。例如，如果一个类型不是平凡可复制的，std::copy()就不能使用memcpy()。但这是有充分理由的；希望一个不是平凡可复制的类的作者有充分的理由以这种方式设计类，我们（或编译器）不应该忽视这一点，而不调用适当的构造函数。
+
+有时，C++算法库中的函数甚至比它们的 C 库等效函数表现得更好。最突出的例子是`std::sort()`与 C 库中的`qsort()`。`std::sort()`和`qsort()`之间的一个重大区别是，`qsort()`是一个函数，而`std::sort()`是一个函数模板。当`qsort()`调用比较函数时，由于它是作为函数指针提供的，通常比使用`std::sort()`时调用的普通比较函数慢得多，后者可能会被编译器内联
+
+### 最佳实践
+
+1. 使用受限算法：在 C++20 中引入的std::ranges下的受限算法比std下的基于迭代器的算法提供了一些优势。受限算法执行以下操作：
+
+   * 支持投影，简化元素的自定义比较。
+   * 支持范围而不是迭代器对。无需将begin()和end()迭代器作为单独的参数传递。
+   * 易于正确使用，并且由于受 C++概念的限制，在编译期间提供描述性错误消息。
+
+2. 仅对需要检索的数据进行排序，合理选择`sort()` 、 `partial_sort()` 和 `nth_element()`
+   
+3. 使用标准算法而不是原始的for循环
+
+   * 标准算法提供了性能。即使标准库中的一些算法看起来很琐碎，它们通常以不明显的方式进行了最优设计。
+   * 标准算法提供了安全性。即使是更简单的算法也可能有一些特殊情况，很容易忽视。
+   * 标准算法是未来的保障；如果您想利用 SIMD 扩展、并行性甚至是以后的 GPU，可以用更合适的算法替换给定的算法（参见第十四章，并行算法）。
+   * 标准算法有详细的文档。
+
