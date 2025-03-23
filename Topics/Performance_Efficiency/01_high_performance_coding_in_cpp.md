@@ -599,3 +599,46 @@ Note the exceptions of `stable_sort()`, `inplace_merge()`, and `stable_partition
    * 标准算法是未来的保障；如果您想利用 SIMD 扩展、并行性甚至是以后的 GPU，可以用更合适的算法替换给定的算法（参见第十四章，并行算法）。
    * 标准算法有详细的文档。
 
+## 6. 范围和视图
+
+随着 C++20 引入 Ranges 库，我们在实现算法时从标准库中受益的方式得到了重大改进：
+
+* 概念（Concepts）：定义了对迭代器和范围的要求，现在可以由编译器更好地检查，并在开发过程中提供更多的帮助。
+* <algorithm> 头文件中所有函数的新重载版本都使用了上述概念进行约束，并接受范围作为参数，而不是迭代器对。
+* 迭代器头文件中受约束的迭代器。
+* 范围视图（Range views），使得算法可以组合。
+
+算法库的局限之一体现在可组合性。如果我们有个Student类，需要得到特定年级的考试最高分：
+
+```cpp
+struct Student {
+  int year_{};
+  int score_{};
+  std::string name_{};
+  // ...
+}; 
+
+// 一般思路
+auto get_max_score(const std::vector<Student>& students, int year) {
+  auto by_year = = { return s.year_ == year; }; 
+  // The student list needs to be copied in
+  // order to filter on the year
+  auto v = std::vector<Student>{};
+  // 使用copy_if()和std::back_inserter()时会创建不必要的Student对象的副本
+  std::ranges::copy_if(students, std::back_inserter(v), by_year); 
+  auto it = std::ranges::max_element(v, std::less{}, &Student::score_);
+  return it != v.end() ? it->score_ : 0; 
+} 
+
+// C20写法
+auto max_value(auto&& range) {
+  const auto it = std::ranges::max_element(range);
+  return it != range.end() ? *it : 0;
+}
+auto get_max_score(const std::vector<Student>& students, int year) {
+  const auto by_year = = { return s.year_ == year; };
+  return max_value(students 
+    | std::views::filter(by_year)
+    | std::views::transform(&Student::score_));
+} 
+```
