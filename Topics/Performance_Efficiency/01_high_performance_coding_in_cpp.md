@@ -642,3 +642,50 @@ auto get_max_score(const std::vector<Student>& students, int year) {
     | std::views::transform(&Student::score_));
 } 
 ```
+
+### 从Ranges库理解视图
+
+**Views in the Ranges library are lazy evaluated iterations over a range. Technically, they are only iterators with built-in logic, but syntactically, they provide a very pleasant syntax for many common operations.**
+
+```cpp
+auto numbers = std::vector{1, 2, 3, 4};
+auto square = [](auto v) {  return v * v; };  // 不是numbers值平方的副本
+auto squared_view = std::views::transform(numbers, square);
+for (auto s : squared_view) { // The square lambda is invoked here
+  std::cout << s << " ";  // 每次访问时调用 std::transform()，即 lazy evaluated
+}
+```
+
+如果要持久化，可以使用`std::ranges::copy()`将视图物化为容器。
+
+```cpp
+// 过滤视图，满足条件的元素，在遍历视图时可见
+auto v = std::vector{4, 5, 6, 7, 6, 5, 4};
+auto odd_view = 
+  std::views::filter(v, [](auto i){ return (i % 2) == 1; });
+for (auto odd_number : odd_view) {
+  std::cout << odd_number << " ";
+}
+// Output: 5 7 5
+```
+
+```cpp
+// 视图可以建立在多个可迭代容器上，看起来像是单一列表
+auto list_of_lists = std::vector<std::vector<int>> {
+  {1, 2},
+  {3, 4, 5},
+  {5},
+  {4, 3, 2, 1}
+};
+auto flattened_view = std::views::join(list_of_lists);
+for (auto v : flattened_view) 
+  std::cout << v << " ";
+// Output: 1 2 3 4 5 5 4 3 2 1
+
+auto max_value = *std::ranges::max_element(flattened_view);
+// max_value is 5 
+```
+
+### 视图是可组合的
+
+The full power of views comes from the ability to combine them. 
