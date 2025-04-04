@@ -686,6 +686,90 @@ auto max_value = *std::ranges::max_element(flattened_view);
 // max_value is 5 
 ```
 
-### 视图是可组合的
+#### 视图是可组合的
 
 The full power of views comes from the ability to combine them. 
+
+视图并不拷贝数据，因此可以在一个数据集合上表达多个操作，实际仅在内部迭代一次
+
+```cpp
+auto get_max_score(const std::vector<Student>& s, int year) {
+  auto by_year = = { return s.year_ == year; };
+
+  auto v1 = std::ranges::ref_view{s}; // Wrap container in a view
+  auto v2 = std::ranges::filter_view{v1, by_year};
+  auto v3 = std::ranges::transform_view{v2, &Student::score_};
+  auto it = std::ranges::max_element(v3);
+  return it != v3.end() ? *it : 0;
+}
+
+// 简写
+using namespace std::ranges;
+auto scores = transform_view{filter_view{ref_view{s}, by_year}, &Student::score_};
+
+// 使用范围适配器
+using namespace std::views;
+auto scores = transform(filter(s, by_year), &Student::score_); 
+```
+
+总之，Ranges 库中的每个视图包括：
+
+* 一个类模板（实际视图类型），它操作视图对象，例如`std::ranges::transform_view`。这些视图类型可以在命名空间`std::ranges`下找到。
+
+* 一个范围适配器对象，它从范围创建视图类的实例，例如`std::views::transform`。所有范围适配器都实现了`operator()()`和`operator|()`，这使得可以使用管道运算符或嵌套来组合转换。范围适配器对象位于命名空间`std::views`下。
+
+#### 视图是具有复杂性保证的非拥有范围
+
+Ranges 库中的视图类型保证在常数时间复杂度内完成构造、复制和析构。
+
+#### 视图不会改变底层容器
+
+#### 视图可以实体化为容器
+
+#### 视图是延迟计算的（惰性评估）
+
+### 标准库的视图
+
+在C++20之前，标准库也提供了类似的非拥有（Non-owning）视图, std::string_view std::span
+
+#### Range views
+
+```cpp
+// 1. 生成
+for (auto i : std::views::iota(-2, 2)) {
+  std::cout << i << ' ';
+}
+// Prints -2 -1 0 1 
+
+// 2. 转换
+std::views::transform   // 转换元素
+std::views::reverse     // 反转元素
+std::views::split       // 分割元素
+std::views::join        // 合并元素
+
+auto csv = std::string{"10,11,12"};
+auto digits = csv 
+  | std::views::split(',')      // [ [1, 0], [1, 1], [1, 2] ]
+  | std::views::join;           // [ 1, 0, 1, 1, 1, 2 ]
+for (auto i : digits) {   std::cout << i; }
+// Prints 101112 
+
+// 3. 采样
+std::views::filter     // 过滤元素
+std::views::take       // 取前n个元素
+std::views::drop       // 跳过前n个元素
+
+auto vec = std::vector{1, 2, 3, 4, 5, 4, 3, 2, 1};
+ auto v = vec
+   | std::views::drop_while([](auto i) { return i < 5; })
+   | std::views::take(3);
+ for (auto i : v) { std::cout << i << " "; }
+// Prints 5 4 3 
+
+// 4. 实用
+// 当您有想要转换或视为视图的东西时，它们非常方便。在这些视图类别中的一些示例是ref_view、all_view、subrange、counted和istream_view。
+```
+
+#### 重新审视 std::string_view 和 std::span
+
+## 7.内存管理
