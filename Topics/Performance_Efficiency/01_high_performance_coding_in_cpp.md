@@ -789,3 +789,79 @@ auto vec = std::vector{1, 2, 3, 4, 5, 4, 3, 2, 1};
 * 程序中的每个线程都有自己的栈。
 
 **堆**（*自由存储区*）
+
+```cpp
+{
+  // C++17之前 placement_new
+  auto* memory = std::malloc(sizeof(User));
+  // ::前面的双冒号确保了从全局命名空间进行解析，以避免选择operator new的重载版本。
+  auto* user = ::new (memory) User("john"); 
+
+  user->~User();
+  std::free(memory);
+}
+
+{
+  // C++17, memory中引入了一些函数来实现
+  // 使用一些以std::uninitialized_开头的函数来构造、复制和移动对象到未初始化的内存区域
+  // 使用std::destroy_at()在特定内存地址上销毁对象，而无需释放内存
+  auto* memory = std::malloc(sizeof(User));
+  auto* user_ptr = reinterpret_cast<User*>(memory);
+  std::uninitialized_fill_n(user_ptr, 1, User{"john"});
+  std::destroy_at(user_ptr);
+  std::free(memory); 
+}
+
+{
+  // C++ 20 
+  std::construct_at(user_ptr, User{"john"});        // C++20 
+}
+```
+
+### 内存对齐
+
+CPU 每次从内存中读取一个字时，将其读入寄存器。64 位架构上的字大小为 64 位，32 位架构上为 32 位。**对齐是一个实现定义的整数值，表示给定对象可以分配的连续地址之间的字节数。**
+
+使用 `alignof` 操作符，如 `std::cout << alignof(int) << '\n';` 可查看 `int` 类型对齐要求，可能输出 4，即 4 字节对齐。
+
+**可移植性问题**：C++ 标准未规定有效地址起始值，实际平台多从 0 开始，虽可用取模运算符检查，但编写完全可移植代码需用 `std::align()`
+
+```cpp
+bool is_aligned(void* ptr, std::size_t alignment) {
+  assert(ptr != nullptr);
+  // 确保 `ptr` 不为空，`alignment` 是 2 的幂（用 `std::has_single_bit()` 检查）
+  assert(std::has_single_bit(alignment)); // Power of 2
+  auto s = std::numeric_limits<std::size_t>::max();
+  auto aligned_ptr = ptr;
+  // 调用 `std::align()` 调整指针，比较原始指针和调整后指针判断是否已对齐
+  std::align(alignment, 1, aligned_ptr, s);
+  return ptr == aligned_ptr;
+} 
+```
+
+`new` 和 `malloc()` 保证返回适合任何标量类型的内存，`<cstddef>` 中的 `std::max_align_t` 类型，对齐要求至少与所有标量类型一样严格，即使请求 `char` 内存，也适合 `std::max_align_t`。
+
+**连续分配 `char` 情况**：连续用 `new` 分配 `char`，`p1` 和 `p2` 间空间取决于 `std::max_align_t` 对齐要求，如系统中为 16 字节，每个 `char` 实例间有 15 字节。
+
+**声明变量时指定**：使用 `alignas` 指定符，如 `alignas(64) int x{}; alignas(64) int y{};` 可确保 `x` 和 `y` 位于不同缓存行。
+
+**定义类型时指定**：如 `struct alignas(64) CacheLine { std::byte data[64]; };` 创建的结构体对象会按 64 字节自定义对齐。
+
+**堆上分配与非默认对齐** C++17 引入 `operator new()` 和 `operator delete()` 新重载，接受 `std::align_val_t` 类型对齐参数。`<cstdlib>` 中 `aligned_alloc()` 函数可手动分配对齐的堆内存。
+
+```cpp
+constexpr auto ps = std::size_t{4096};      // Page size
+struct alignas(ps) Page {
+    std::byte data_[ps];
+};
+auto* page = new Page{};                    // Memory page
+assert(is_aligned(page, ps));               // True
+// Use page ...
+delete page; 
+```
+
+**注意事项**
+
+- 内存页面不是 C++ 抽象机器一部分，无可移植方法编程获取当前系统页面大小，Unix 系统可用 `boost::mapped_region::get_page_size()` 或 `getpagesize()`。
+- 支持的对齐集由使用的标准库实现定义，而非 C++ 标准。
+
