@@ -865,3 +865,36 @@ delete page;
 - 内存页面不是 C++ 抽象机器一部分，无可移植方法编程获取当前系统页面大小，Unix 系统可用 `boost::mapped_region::get_page_size()` 或 `getpagesize()`。
 - 支持的对齐集由使用的标准库实现定义，而非 C++ 标准。
 
+**填充**，注意设置数据成员的顺序，可以起到节约内存的效果：
+
+```cpp
+class Document {
+  bool is_cached_{};
+  std::byte padding1[7]; // Invisible padding inserted by compiler
+  double rank_{};
+  int id_{};
+  std::byte padding2[4]; // Invisible padding inserted by compiler
+}; 
+
+std::cout << sizeof(Document) << '\n'; // Possible output is 24 
+
+// Version 2 of Document class after padding
+class Document { 
+  double rank_{}; 
+  int id_{}; 
+  bool is_cached_{}; 
+  std::byte padding[3]; // Invisible padding inserted by compiler 
+};
+
+std::cout << sizeof(Document) << '\n'; // Possible output is 16 
+```
+
+### 内存所有权
+
+* 局部变量由当前作用域拥有。当作用域结束时，在作用域内创建的对象将被自动销毁
+* 静态和全局变量由程序拥有，并将在程序终止时被销毁
+* 数据成员由它们所属的类的实例拥有
+* 只有动态变量没有默认所有者，程序员需要确保所有动态分配的变量都有一个所有者来控制变量的生命周期
+
+明确表达所有权，最小化手动内存管理
+

@@ -109,8 +109,9 @@
 #### Storage
 
 - <font color=green>[Done]</font> `数据库系统内幕`
-- <font color=red>[P0]</font> `数据密集型应用系统设计`
+- <font color=red>[P0]</font> `数据密集型应用系统设计` (《Designing Data-Intensive Applications》 by Martin Kleppmann)
 - `PingCap awesome database learning from github`
+- `《Database Internals: A Deep Dive into How Distributed Data Systems Work》 by Alex Petrov`
 
 #### Observebility
 
