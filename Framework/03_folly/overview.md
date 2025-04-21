@@ -1,5 +1,5 @@
 ---
-description: 'https://github.com/facebook/folly/blob/master/folly/docs/Overview.md'
+description: https://github.com/facebook/folly/blob/master/folly/docs/Overview.md
 ---
 
 # overview
