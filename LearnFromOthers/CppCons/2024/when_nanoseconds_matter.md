@@ -31,3 +31,23 @@ void InitAndRunBenchmark() {
     RunBenchmark();
 }
 ```
+
+## Low-Lattency transport
+
+* General pattern
+  * kernel bypass when receiving data from the exchange(or other low-latency signals)
+  * dispatch/fan-out to processes on the same server
+
+## Principles
+
+1. most of the time, you don't want node containers
+2. understanding your problem
+3. hand tailored(specilized) algorithms are key to achieve performance
+4. simplicity is the ultimate sophistication
+5. mechanical sympathy
+6. true efficiency is dound not in the layers of complexity we add, but in the unnecessary layers we remove
+7. choose the right tool for the right task
+8. being fast is good, staying fast is better
+9. thinking about the system as a whole
+10. the performance of your code depends on your colleagues
+
