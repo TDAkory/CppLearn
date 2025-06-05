@@ -8,6 +8,9 @@
 - [How to be Greater](#how-to-be-greater)
   - [Yearly Goal](#yearly-goal)
     - [2025](#2025)
+      - [Hands on](#hands-on)
+      - [**Top Priority Tasks Q2**](#top-priority-tasks-q2)
+      - [**Top Priority Tasks Q1**](#top-priority-tasks-q1)
     - [2024](#2024)
   - [Fundations](#fundations)
     - [OS](#os)
@@ -27,7 +30,7 @@
   - [OutPuts](#outputs)
     - [long-term project](#long-term-project)
     - [blog topics](#blog-topics)
-  - [语言](#语言)
+  - [交流语言](#交流语言)
   - [体质](#体质)
   - [Overall Goals](#overall-goals)
 
@@ -37,12 +40,14 @@
 
 **需要完成的一些事情：**
 
-| 事项                                     | 说明                                                 | 优先级                            | 进展                                  |
-| -------------------------------------- | -------------------------------------------------- | ------------------------------ | ----------------------------------- |
+| 事项                     | 说明                     | 优先级                     | 进展                     |
+| ------------------------ | ----------------------- | ------------------------- | ----------------------- |
 | [软考](https://www.ruankao.org.cn/guide) | 系统架构设计师 （3月底报名）5.25~5.28  （9月报名）11.9~12            | <font color=red>[P0]</font>    | <font color=blue>[Doing]</font>     |
 | 金三银四                                   | 一轮interview，重新认识市场                                 | <font color=red>[P0]</font>    | <font color=yellow>[Pending]</font> |
 | [日语 N3](https://jlpt-main.neea.cn/)    | 7月12月考试，提前3个月报名                                    | <font color=orange>[P1]</font> | <font color=yellow>[Pending]</font> |
 | [中口](http://www.shwyky.net/portal/)    | 6月12月报名 3月9月中旬笔试 通过笔试的两年内报名口试（4次机会）4月10月报名，5月11月口试 | <font color=orange>[P1]</font> | <font color=yellow>[Pending]</font> |
+| 博客 | 发布50篇博客，构建自己的专栏 | <font color=red>[P0]</font> | 4/50 |
+| 代码 | StellarKit完善、Rust练手项目*3 | <font color=red>[P0]</font> | |
 
 #### Hands on
 
@@ -173,7 +178,7 @@
 
 ### long-term project
 
-- 长期增强 CodeSnippets
+- 长期增强 StellarKit
 - C++ ProcFrameWork
 - C++ 反射框架
 - C++ 超时工具
@@ -183,7 +188,7 @@
 
 ### [blog topics](../BlogSrc/README.md)
 
-## 语言
+## 交流语言
 
 - 英语词汇增强、口语练习，maybe 挑战下中级口译
 - 日语基础，日常口语，年底日语N3考试
