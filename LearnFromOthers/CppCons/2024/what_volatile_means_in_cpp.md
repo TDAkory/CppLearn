@@ -106,3 +106,9 @@ vol_write_int(v_int_2) = 256;
 * 这种逻辑和访问 volatile 对象应有的行为很相似（即要严格按实际情况去访问，不能随意优化 ）
 * 所以，这些 workaround 函数就像是 volatile 本应提供的保护机制的一种 “冗余备份”，能在 volatile 编译出问题时，辅助保证对变量访问的正确性
 
+## Takeaways
+
+* volatile tells the compiler that accessing an object may have side effects that mustn’t be optimized away.
+* The compiler must keep accesses to volatile objects in order, but may reorder accesses to non-volatile objects around them.
+* Use synchronization tools (e.g., mutexes and semaphores) rather than volatile objects to manage inter-thread communication.
+* Accesses to volatile objects are not guaranteed to be atomic.
