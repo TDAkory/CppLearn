@@ -178,7 +178,7 @@
 
 ### long-term project
 
-- 长期增强 StellarKit
+- 长期增强 StellarKit（线程池、连接池、缓存、限流器、熔断）
 - C++ ProcFrameWork
 - C++ 反射框架
 - C++ 超时工具

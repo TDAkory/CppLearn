@@ -502,6 +502,8 @@ void BenchmarkRunner::DoOneRepetition() {
 
 ## CPU开销是如何统计的
 
+`BenchmarkRunner::DoNIterations()` 根据当前 `BenchmarkInstance` 的线程配置，在线程池中执行一次测试。该函数会创建 `ThreadManager` 来管理线程的执行，并启动多个线程并行执行测试。
+
 ```cpp
 BenchmarkRunner::IterationResults BenchmarkRunner::DoNIterations() {
   
@@ -555,3 +557,178 @@ void RunInThread(const BenchmarkInstance* b, IterationCount iters,
   manager->NotifyThreadComplete();
 }
 ```
+
+`ThreadTimer` 是统计 CPU 开销的关键类。在 `RunInThread` 函数中，会根据 `BenchmarkInstance` 的 `measure_process_cpu_time()` 方法的返回值来决定创建的 `ThreadTimer` 的属性，它们的区别仅体现在获取的是线程耗时还是进程耗时：
+
+```cpp
+  static ThreadTimer Create() {
+    return ThreadTimer(/*measure_process_cpu_time_=*/false);
+  }
+  static ThreadTimer CreateProcessCpuTime() {
+    return ThreadTimer(/*measure_process_cpu_time_=*/true);
+  }
+
+  ……
+
+  double ReadCpuTimerOfChoice() const {
+    if (measure_process_cpu_time) return ProcessCPUUsage();
+    return ThreadCPUUsage();
+  }
+```
+
+可以看到 `ThreadTimer` 作为入参被传入 `b->Run` 方法，这里的调用链路是：
+
+```cpp
+// b is instance of BenchmarkInstance
+State st = b->Run(iters, thread_id, &timer, manager,
+                    perf_counters_measurement, profiler_manager_);
+
+State BenchmarkInstance::Run(
+    IterationCount iters, int thread_id, internal::ThreadTimer* timer,
+    internal::ThreadManager* manager,
+    internal::PerfCountersMeasurement* perf_counters_measurement,
+    ProfilerManager* profiler_manager) const {
+  State st(name_.function_name, iters, args_, thread_id, threads_, timer,
+           manager, perf_counters_measurement, profiler_manager);
+  benchmark_.Run(st);
+  return st;
+}
+```
+
+在 benchmark::State 中，有根据运行状态操作 ThreadTimer 的接口，会调用：
+
+```cpp
+// thread_timer.h
+
+// 启动计时器，记录当前的实时时间和 CPU 时间
+void StartTimer() {
+  running_ = true;
+  start_real_time_ = ChronoClockNow();
+  start_cpu_time_ = ReadCpuTimerOfChoice();
+}
+
+// 停止计时器，计算从启动到停止所经过的实时时间和 CPU 时间，并将其累加到 real_time_used_ 和 cpu_time_used_ 中
+void StopTimer() {
+  BM_CHECK(running_);
+  running_ = false;
+  real_time_used_ += ChronoClockNow() - start_real_time_;
+  // Floating point error can result in the subtraction producing a negative
+  // time. Guard against that.
+  cpu_time_used_ +=
+      std::max<double>(ReadCpuTimerOfChoice() - start_cpu_time_, 0);
+}
+```
+
+以 `ChronoClockNow` 为例，时间是如何被统计的，可以看到`benchmark`为了跨平台，支持了多种时间戳计算方式，在`Linux`环境下，最终调用的就是`std::chrono::high_resolution_clock`:
+
+```cpp
+struct ChooseClockType {
+#if defined(BENCHMARK_OS_QURT)
+  typedef QuRTClock type;
+#elif defined(HAVE_STEADY_CLOCK)
+  typedef ChooseSteadyClock<>::type type;
+#else
+  typedef std::chrono::high_resolution_clock type;
+#endif
+};
+
+inline double ChronoClockNow() {
+  typedef ChooseClockType::type ClockType;
+  using FpSeconds = std::chrono::duration<double, std::chrono::seconds::period>;
+  return FpSeconds(ClockType::now().time_since_epoch()).count();
+}
+```
+
+那么 `State` 是如何调用的呢，在一个基本的 `benchmark` 里，`State` 类的 `KeepRunning` 方法用于控制循环的执行次数，并且在循环开始和结束时调用 `ThreadTimer` 的 `StartTimer` 和 `StopTimer` 方法：
+
+```cpp
+// benchmark.h
+inline BENCHMARK_ALWAYS_INLINE bool State::KeepRunning() {
+  return KeepRunningInternal(1, /*is_batch=*/false);
+}
+
+inline BENCHMARK_ALWAYS_INLINE bool State::KeepRunningInternal(IterationCount n,
+                                                               bool is_batch) {
+  // total_iterations_ is set to 0 by the constructor, and always set to a
+  // nonzero value by StartKepRunning().
+  assert(n > 0);
+  // n must be 1 unless is_batch is true.
+  assert(is_batch || n == 1);
+  if (BENCHMARK_BUILTIN_EXPECT(total_iterations_ >= n, true)) {
+    total_iterations_ -= n;
+    return true;
+  }
+  if (!started_) {
+    StartKeepRunning();
+    if (!skipped() && total_iterations_ >= n) {
+      total_iterations_ -= n;
+      return true;
+    }
+  }
+  // For non-batch runs, total_iterations_ must be 0 by now.
+  if (is_batch && total_iterations_ != 0) {
+    batch_leftover_ = n - total_iterations_;
+    total_iterations_ = 0;
+    return true;
+  }
+  FinishKeepRunning();
+  return false;
+}
+
+// benchmark.cc
+void State::StartKeepRunning() {
+  BM_CHECK(!started_ && !finished_);
+  started_ = true;
+  total_iterations_ = skipped() ? 0 : max_iterations;
+  if (BENCHMARK_BUILTIN_EXPECT(profiler_manager_ != nullptr, false)) {
+    profiler_manager_->AfterSetupStart();
+  }
+  manager_->StartStopBarrier();
+  if (!skipped()) {
+    ResumeTiming();
+  }
+}
+
+void State::ResumeTiming() {
+  BM_CHECK(started_ && !finished_ && !skipped());
+  timer_->StartTimer();
+  if (perf_counters_measurement_ != nullptr) {
+    perf_counters_measurement_->Start();
+  }
+}
+
+void State::FinishKeepRunning() {
+  BM_CHECK(started_ && (!finished_ || skipped()));
+  if (!skipped()) {
+    PauseTiming();
+  }
+  // Total iterations has now wrapped around past 0. Fix this.
+  total_iterations_ = 0;
+  finished_ = true;
+  manager_->StartStopBarrier();
+  if (BENCHMARK_BUILTIN_EXPECT(profiler_manager_ != nullptr, false)) {
+    profiler_manager_->BeforeTeardownStop();
+  }
+}
+
+void State::PauseTiming() {
+  // Add in time accumulated so far
+  BM_CHECK(started_ && !finished_ && !skipped());
+  timer_->StopTimer();
+  if (perf_counters_measurement_ != nullptr) {
+    std::vector<std::pair<std::string, double>> measurements;
+    if (!perf_counters_measurement_->Stop(measurements)) {
+      BM_CHECK(false) << "Perf counters read the value failed.";
+    }
+    for (const auto& name_and_measurement : measurements) {
+      const std::string& name = name_and_measurement.first;
+      const double measurement = name_and_measurement.second;
+      // Counter was inserted with `kAvgIterations` flag by the constructor.
+      assert(counters.find(name) != counters.end());
+      counters[name].value += measurement;
+    }
+  }
+}
+```
+
+统计到的时间会被累加到 `ThreadManager::Result` 结构体的中。在所有线程执行完毕后，`ThreadManager` 会等待所有线程完成，并汇总每个线程的统计信息。最终，整个基准测试的 CPU 开销就是所有线程的 `cpu_time_used` 之和。
