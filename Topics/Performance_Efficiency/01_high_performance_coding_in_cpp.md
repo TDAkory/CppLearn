@@ -910,3 +910,112 @@ std::cout << sizeof(Document) << '\n'; // Possible output is 16
 
 * 独占指针也非常高效，因为与普通原始指针相比，它们几乎没有性能开销。轻微的开销是由于`std::unique_ptr`具有非平凡的析构函数，这意味着（与原始指针不同）在传递给函数时无法将其传递到 CPU 寄存器中。这使它们比原始指针慢。
 
+### 小对象优化
+
+```cpp
+// 字符串的小对象优化的简单示意
+struct Long { 
+  size_t capacity_{}; 
+  size_t size_{}; 
+  char* data_{}; 
+}; 
+
+struct Short { 
+  unsigned char size_{};
+  char data_[23]{}; 
+};
+
+union u_ { 
+  Short short_layout_; 
+  Long long_layout_; 
+};
+```
+
+libc++在长模式下使用capacity_数据成员的最低有效位，而在短模式下使用size_数据成员的最低有效位。对于长模式，这个位是多余的，因为字符串总是分配 2 的倍数的内存大小。在短模式下，可以只使用 7 位来存储大小，以便一个位可以用于标志。
+
+### 自定义内存管理
+
+> 可以结合 内存分配算法 + PMR 实现一个例子
+
+## 8. 编译时编程
+
+### 模版元编程
+
+略过部分基础内容
+
+C++20 引入了一种新的缩写语法，用于编写函数模板，采用了通用 lambda 使用的相同风格。通过使用auto作为函数参数类型，我们实际上创建的是一个函数模板，而不是一个常规函数
+
+```cpp
+// pow_n accepts any number type 
+template <typename T> 
+auto pow_n(const T& v, int n) { 
+  auto product = T{1}; 
+  for (int i = 0; i < n; ++i) { 
+    product *= v; 
+  }
+  return product; 
+} 
+
+// C20
+auto pow_n(const auto &v, int n) {  // Declares a function template
+  typename std::remove_cvref<decltype(v)>::type product{1}; 
+  for (int i = 0; i < n; ++i) { product *= v; } 
+  return product;
+}
+```
+
+在 C++20 之前，在通用 lambda 的主体中经常看到decltype。然而，现在可以通过向通用 lambda 添加显式模板参数来避免相当不方便的decltype:
+
+```cpp
+auto pow_n = []<class T>(const T& v, int n) { 
+  auto product = T{1};
+  for (int i = 0; i < n; ++i) { product *= v; }
+  return product;
+}; 
+```
+
+### 类型特征（`<type_traits>`）
+
+为了提取有关模板类型的信息，标准库提供了一个类型特征库，该库在`<type_traits>`头文件中可用。所有类型特征都在编译时评估。
+
+有两类类型特征：
+
+* 返回关于类型信息的类型特征，作为布尔值或整数值。
+* 返回新类型的类型特征。这些类型特征也被称为元函数。
+
+### 常量表达式
+
+`constexpr`关键字也可以与函数一起使用。在这种情况下，它告诉编译器某个函数打算在编译时评估。
+
+`constexpr`函数有一些限制；不允许执行以下操作：
+
+* 处理本地静态变量
+* 处理thread_local变量
+* 调用任何函数，本身不是constexpr函数
+
+```cpp
+constexpr auto sum(int x, int y, int z) { return x + y + z; } 
+
+constexpr auto value = sum(3, 4, 5); 
+// 由于sum()的结果用于常量表达式，并且其所有参数都可以在编译时确定，因此编译器将生成
+const auto value = 12; 
+// 调用sum()并将结果存储在未标记为constexpr的变量中，编译器可能（很可能）在编译时评估sum()
+auto value = sum(3, 4, 5); // value is not constexpr 
+```
+
+`constexpr`函数可以在运行时或编译时调用。如果我们想限制函数的使用，使其只在编译时调用，我们可以使用关键字`consteval`而不是`constexpr`。假设我们想禁止在运行时使用`sum()`。使用 C++20，我们可以通过以下代码实现：
+
+```cpp
+// 立即函数
+consteval auto sum(int x, int y, int z) { return x + y + z; } 
+```
+
+`if constexpr`编译期条件判断语句，它允许在编译期间根据条件选择是否编译某段代码。
+
+```cpp
+if constexpr (constant_expression) {
+    // 如果 constant_expression 为 true，则编译这段代码，忽略else分支
+} else {
+    // 如果 constant_expression 为 false，则编译这段代码，忽略if分支
+}
+```
