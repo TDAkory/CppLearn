@@ -1019,3 +1019,142 @@ if constexpr (constant_expression) {
     // 如果 constant_expression 为 false，则编译这段代码，忽略if分支
 }
 ```
+
+下面例子会编译失败，因为编译器不理解程序分支是否可达，在代码生成时会生成对应的else分支。
+
+```cpp
+template <typename T> 
+auto generic_mod(const T& v, const T& n) -> T {
+  assert(n != 0);
+  if (std::is_floating_point_v<T>) { return std::fmod(v, n); }
+  else { return v % n; }
+} 
+
+// 等价于
+auto generic_mod(const float& v, const float& n) -> float {
+  assert(n != 0);
+  if (true) { return std::fmod(v, n); }
+  else { return v % n; } // Will not compile
+} 
+
+```
+
+改写为 `if constexpr` 可以通过编译：
+
+```cpp
+template <typename T> 
+auto generic_mod(const T& v, const T& n) -> T { 
+  assert(n != 0);
+  if constexpr (std::is_floating_point_v<T>) {
+    return std::fmod(v, n);
+  } else {                 // If T is a floating point,
+    return v % n;          // this code is eradicated
+  }
+} 
+
+// 等价于
+auto generic_mod(const float& v, const float& n) -> float { 
+  assert(n != 0);
+  return std::fmod(v, n); 
+} 
+
+```
+
+使用`static_assert()`在编译程序时捕获编程错误
+
+### `concept`和`requires`
+
+![error in template compile](https://raw.githubusercontent.com/TDAkory/ImageResources/master/img/CppLearn/error_in_template_compile.jpg
+)
+
+```cpp
+// 基本例子
+template <typename T>
+concept FloatingPoint = std::is_floating_point_v<T>; 
+
+// 可以使用逻辑运算符组合多个约束条件
+template <typename T>
+concept Number = FloatingPoint<T> || std::is_integral_v<T>;
+
+// 可以使用 requires 来添加一组语句到 concept 中
+template<typename T>
+concept range = requires(T& t) {
+  ranges::begin(t);
+  ranges::end(t);
+};
+```
+
+使用概念约束类型
+
+```cpp
+// 使用 concept 约束模版函数 或 模板类
+template <typename T>
+requires std::integral<T>
+auto mod(T v, T n) { 
+  return v % n;
+}
+
+template <typename T>
+requires std::integral<T>
+struct Foo {
+  T value;
+};
+
+// 更紧凑的写法
+template <std::integral T>
+auto mod(T v, T n) { 
+  return v % n;
+}
+
+template <std::integral T>
+struct Foo {
+  T value;
+};
+
+// 定义函数模板时使用缩写的函数模板形式，可以在auto关键字前面添加 concept
+auto mod(std::integral auto v, std::integral auto n) {
+  return v % n;
+}
+
+// 返回类型也可以通过使用概念来约束
+std::integral auto mod(std::integral auto v, std::integral auto n) {
+  return v % n;
+} 
+```
+
+Point2D模板的约束版本
+
+```cpp
+template<typename T>
+concept Arithmetic = std::is_arithmetic_v<T>;
+
+template<typename T>
+concept Point = requires<T p> {
+  requires std::is_same_v<decltype(p.x()), decltype(p.y())>;
+  requires Arithmetic<decltype(p.x())>;
+};
+
+std::floating_point auto dist(Point auto p1, Point auto p2) {
+  ……
+}
+
+template <Arithmetic T> // T is now constrained!
+class Point2D {
+public:
+  Point2D(T x, T y) : x_{x}, y_{y} {}
+  auto x() { return x_; }
+  auto y() { return y_; }
+  // ...
+private:
+  T x_{};
+  T y_{};
+}; 
+```
+
+接口现在更加描述性，当我们尝试用错误的参数类型实例化它时，我们将在实例化阶段而不是最终编译阶段获得错误。
+
+类型和概念都指定了对象上支持的一组操作。通过检查类型或概念，我们可以确定某些对象如何构造、移动、比较和通过成员函数访问等。
+
+一个重大的区别是，概念并不说任何关于对象如何存储在内存中，而类型除了其支持的操作集之外还提供了这些信息。例如，我们可以在类型上使用sizeof运算符，但不能在概念上使用。
+
+C++20 还包括一个新的 `<concepts>` 头文件，其中包含预定义的概念。您已经看到其中一些概念的作用。许多概念都是基于类型特性库中的特性。然而，有一些基本概念以前没有用特性表达。其中最重要的是比较概念，如 `std::equality_comparable` 和 `std::totally_ordered`，以及对象概念，如 `std::movable`、`std::copyable`、`std::regular` 和 `std::semiregular`。我们不会在标准库的概念上花费更多时间，但在开始定义自己的概念之前，请记住将它们牢记在心。在正确的泛化级别上定义概念并不是件容易的事，通常明智的做法是基于已经存在的概念定义新的概念。

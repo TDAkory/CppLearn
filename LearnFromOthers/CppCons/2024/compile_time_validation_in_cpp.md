@@ -41,4 +41,15 @@ template<auto error>
 constexpr auto report_error() {
     static_assert(sizeof(error) == 0); // size can never be 0
 }
+
+// C++26 enables user generated error messages in static_assert
+template<auto error>
+constexpr auto report_error() {
+    static_assert(always_false<error>, error.message());
+}
 ```
+
+## Compile-time Unit Tests
+
+compile-time components (using constexpr, consteval, template metaprogramming) can also be tested at compile-time.
+
