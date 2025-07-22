@@ -1158,3 +1158,79 @@ private:
 一个重大的区别是，概念并不说任何关于对象如何存储在内存中，而类型除了其支持的操作集之外还提供了这些信息。例如，我们可以在类型上使用sizeof运算符，但不能在概念上使用。
 
 C++20 还包括一个新的 `<concepts>` 头文件，其中包含预定义的概念。您已经看到其中一些概念的作用。许多概念都是基于类型特性库中的特性。然而，有一些基本概念以前没有用特性表达。其中最重要的是比较概念，如 `std::equality_comparable` 和 `std::totally_ordered`，以及对象概念，如 `std::movable`、`std::copyable`、`std::regular` 和 `std::semiregular`。我们不会在标准库的概念上花费更多时间，但在开始定义自己的概念之前，请记住将它们牢记在心。在正确的泛化级别上定义概念并不是件容易的事，通常明智的做法是基于已经存在的概念定义新的概念。
+
+
+## 9.基本实用程序
+
+介绍 C++实用库中的一些基本类
+
+* 使用std::optional表示可选值
+
+* 使用std::pair、std::tuple和std::tie()来固定大小的集合
+
+* 使用标准容器存储具有std::any和std::variant类型的元素的动态大小集合
+
+### `std::optional<T>`
+
+`std::optional`的语法类似于指针；值通过`operator*()`或`operator->()`访问。尝试使用`operator*()`或`operator->()`访问空的可选值的值是未定义行为。还可以使用`value()`成员函数访问值，如果可选值不包含值，则会抛出`std::bad_optional_access`异常。
+
+如果对std::optional<T>的容器进行排序，空的可选值将出现在容器的开头，而非空的可选值将像通常一样排序
+
+### 固定大小异构集合
+
+`std::pair` `std::tuple`
+
+C++11 引入了一个名为std::tuple的新实用类，它是std::pair的泛化，可以容纳任意数量的元素。
+
+```cpp
+auto t = std::tuple<int, std::string, bool>{}; 
+```
+
+可以使用自由函数模板`std::get<Index>()`访问std::tuple的各个元素。std::tuple类基本上是一个简单的结构，其成员可以通过编译时索引访问。
+
+std::tuple包含不同类型的元素，而基于范围的 for 循环中const auto& v的类型只会被评估一次，无法适配元组中多种不同类型的元素，因此这类代码无法编译。
+
+同时，由于迭代器不能改变指向的类型，std::tuple不提供begin()、end()成员函数及下标运算符[]，常规迭代算法也不适用，所以需要其他方法来展开元组。
+
+[godbolt](https://godbolt.org/z/nj9s7xjYf)
+
+```cpp
+// 为特定索引生成调用的函数
+template <size_t Index, typename Tuple, typename Func> 
+void tuple_at(const Tuple& t, Func f) {
+  const auto& v = std::get<Index>(t);
+  std::invoke(f, v);
+} 
+
+// 如果索引等于元组大小，它会生成一个空函数。否则，它会在传递的索引处执行 lambda，并生成一个索引增加 1 的新函数
+template <typename Tuple, typename Func, size_t Index = 0> 
+void tuple_for_each(const Tuple& t, const Func& f) {
+  constexpr auto n = std::tuple_size_v<Tuple>;
+  if constexpr(Index < n) {
+    tuple_at<Index>(t, f);
+    tuple_for_each<Tuple, Func, Index+1>(t, f);
+  }
+}
+
+auto t = std::tuple{1, true, std::string{"Jedi"}};
+tuple_for_each(t, [](const auto& v) { std::cout << v << " "; });
+// Prints "1 true Jedi" 
+```
+
+在tuple_for_each()的基础上，可以以类似的方式实现迭代元组的不同算法。以下是std::any_of()为元组实现的示例
+
+```cpp
+template <typename Tuple, typename Func, size_t Index = 0> 
+auto tuple_any_of(const Tuple& t, const Func& f) -> bool { 
+  constexpr auto n = std::tuple_size_v<Tuple>; 
+  if constexpr(Index < n) { 
+    bool success = std::invoke(f, std::get<Index>(t)); 
+    if (success) {
+      return true;
+    }
+    return tuple_any_of<Tuple, Func, Index+1>(t, f); 
+  } else { 
+    return false; 
+  } 
+} 
+```
