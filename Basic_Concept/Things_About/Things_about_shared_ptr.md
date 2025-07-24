@@ -112,6 +112,8 @@ class _Sp_counted_base : public _Mutex_base<_Lp> {
 };
 ```
 
+![shared_ptr structure](https://raw.githubusercontent.com/TDAkory/ImageResources/master/img/CppLearn/shared_ptr.jpg)
+
 可以看到，`std::shared_ptr`是面向用户的一层封装，其实现核心在`__shared_ptr`中：
 
 * `__shared_ptr`中的 `_M_ptr` 是指向被管理对象的指针，
