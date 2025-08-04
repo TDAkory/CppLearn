@@ -1234,3 +1234,128 @@ auto tuple_any_of(const Tuple& t, const Func& f) -> bool {
   } 
 } 
 ```
+
+C++17 引入结构化绑定来优雅地访问元组中的元素
+
+```cpp
+auto make_saturn() { return std::tuple{"Saturn"s, 82, true}; }
+const auto& [name, n_moons, rings] = make_saturn();
+std::cout << name << ' ' << n_moons << ' ' << rings << '\n'; 
+```
+
+**可变模板参数包使程序员能够创建可以接受任意数量参数的模板函数。**
+
+参数包通过在类型名称前面放置三个点和在可变参数后面放置三个点来识别，用逗号分隔扩展包：
+
+```cpp
+template<typename ...Ts> 
+auto f(Ts... values) {
+  g(values...);
+}
+```
+
+### 动态大小的异构集合
+
+`std::any` `std::variant`
+
+```cpp
+// 使用std::any作为基本类型。
+// 缺点是性能不好：
+//  每次访问其中的值时，必须在运行时测试类型，编译时完全失去了存储值的类型信息；
+//  在堆上分配对象而不是栈上
+auto container = std::vector<std::any>(42, "hi", true);
+```
+
+[`std::variant`](https://en.cppreference.com/w/cpp/utility/variant.html)：The class template std::variant represents a type-safe union.
+
+* 它不会将其包含的类型存储在堆上（不像std::any）
+* 它可以通过通用 lambda 调用，这意味着您不必明确知道其当前包含的类型
+
+```cpp
+// 用 std::holds_alternative<T>() 来检查变体当前是否持有给定类型
+using VariantType = std::variant<int, std::string, bool>; 
+VariantType v{}; 
+std::holds_alternative<int>(v);  // true, int is first alternative
+v = 7; 
+std::holds_alternative<int>(v);  // true
+v = std::string{"Anne"};
+std::holds_alternative<int>(v);  // false, int was overwritten 
+v = false; 
+std::holds_alternative<bool>(v); // true, v is now bool 
+```
+
+简单来说，`std::variant<T1, T2, ..., Tn>` 的大小遵循：`sizeof(std::variant) = 最大sizeof(Ti) + 判别器大小 + 可能的对齐填充`
+
+#### std::variant 的异常安全性
+
+`std::variant` 的构造过程可能因存储类型的构造函数抛出异常而失败。此时：
+
+- 如果在初始化第一个（或唯一）可能的类型时抛出异常，`variant` 会进入 **`valueless_by_exception` 状态**（不持有任何有效值）。
+- 这种状态是安全的：`variant` 对象本身仍可正常析构，不会导致资源泄漏，也不会产生未定义行为。
+- 例：`std::variant<int, std::string> v("hello");` 若 `std::string` 的构造抛出异常（如内存分配失败），`v` 会进入 `valueless_by_exception` 状态。
+
+对 `std::variant` 进行赋值（`operator=`）或修改（如 `emplace`、`swap`）时，异常安全取决于具体操作：
+
+- **`emplace` 操作**：  
+  直接在 `variant` 内部构造新值以替换当前值。若新值的构造函数抛出异常：
+  - 若替换前 `variant` 已持有值，旧值会被销毁，`variant` 进入 `valueless_by_exception` 状态（基本异常安全：对象状态有效但可能丢失原有值）。
+  - 若 `variant` 原本就是 `valueless_by_exception` 状态，异常后仍保持该状态。
+
+- **赋值操作（`operator=`）**：  
+  当赋予新类型或同类型值时，实现通常采用“复制-交换”策略：
+  1. 先构造一个临时 `variant` 持有新值；
+  2. 若构造成功，与当前 `variant` 交换状态；
+  3. 若临时 `variant` 构造失败，当前 `variant` 状态不变（**强异常安全保证**）。
+
+- **`swap` 操作**：  
+  交换两个 `variant` 的状态，通常是 noexcept 的（若存储类型的交换操作 noexcept）。若交换过程中抛出异常（极少发生），标准未强制规定状态，但实践中会保证两个 `variant` 处于有效状态（可能交换不完整，但无资源泄漏）。
+
+`valueless_by_exception` 是 `std::variant` 专门设计的“安全无效状态”，用于应对构造/修改时的异常：
+
+- 可通过 `valueless_by_exception()` 方法检测该状态。
+- 处于该状态的 `variant` 仍可正常析构，也可被重新赋值为有效状态。
+- 若对该状态的 `variant` 调用 `get<T>()` 或 `visit`，会抛出 `std::bad_variant_access` 异常（属于预期行为，而非安全问题）。
+
+
+`std::variant` 的析构函数始终安全：
+
+- 若持有有效值，会调用对应类型的析构函数释放资源。
+- 若处于 `valueless_by_exception` 状态，析构函数无操作（无需释放资源）。
+- 无论哪种情况，都不会导致资源泄漏。
+
+使用时需注意检测 `valueless_by_exception` 状态，避免对无效状态的 `variant` 进行访问操作。
+
+#### 访问变体
+
+访问std::variant中的变量时，我们使用全局函数std::visit()，通常通过 lambda 来访问
+
+```cpp
+auto var = std::variant<int, bool, float>{};
+std::visit([](auto&& val) { std::cout << val; }, var); 
+
+// 使用通用 lambda 和变体var调用std::visit()时，编译器会将 lambda 概念上转换为一个常规类
+// 该类对变体中的每种类型进行operator()重载，类似如下：
+struct GeneratedFunctorImpl {
+  auto operator()(int&& v)   { std::cout << v; }
+  auto operator()(bool&& v)  { std::cout << v; }
+  auto operator()(float&& v) { std::cout << v; }
+}; 
+
+// std::visit()函数扩展为使用std::holds_alternative<T>()的if...else链
+// 或使用std::variant的索引生成正确的调用std::get<T>()的跳转表。
+```
+
+#### 全局函数 `std::get()`
+
+全局函数模板`std::get()`可用于`std::tuple`、`std::pair`、`std::variant`和`std::array`。有两种实例化std::get()的方式，一种是使用索引，一种是使用类型：
+
+* `std::get<Index>()`: 当`std::get()`与索引一起使用时，如`std::get<1>(v)`，它返回std::tuple、std::pair或std::array中相应索引处的值。
+
+* `std::get<Type>()`: 当`std::get()`与类型一起使用时，如`std::get<int>(v)`，返回std::tuple、std::pair或std::variant中的相应值。对于std::variant，如果变体当前不持有该类型，则会抛出std::bad_variant_access异常。请注意，如果v是std::tuple，并且Type包含多次，则必须使用索引来访问该类型。
+
+## 10. 代理对象和延迟评估
+
+> Proxy Objects and Lazy Evaluation
+
+
+
