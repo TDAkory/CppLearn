@@ -105,15 +105,11 @@ void printAll(Args... args) {
 
 int main() {
     func(1);
-
     func(1, "hello");
-
     func(1, "hello", false);
 
     printAll(1);
-
     printAll(1, "hello");
-
     printAll(1, "hello", false);
 
     return 0;
@@ -125,3 +121,223 @@ int main() {
 ![param pack expansion example](https://raw.githubusercontent.com/TDAkory/ImageResources/master/img/CppLearn/param_pack_asm.png)
 
 ## Pack expansion
+
+参数包展开是指在一个后跟省略号（...）的模式中，当模式中至少出现一个参数包名称时，该模式会被展开为零个或多个模式实例。在展开过程中，**参数包的名称会按顺序被包中的每个元素替换：对齐说明符(Alignment specifier)的实例化以空格分隔、其他实例化以逗号分隔**
+
+```cpp
+template<class... Us>
+void f(Us... pargs) {}
+ 
+template<class... Ts>
+void g(Ts... args)
+{
+    f(&args...); // “&args...” is a pack expansion
+                 // “&args” is its pattern
+}
+ 
+g(1, 0.2, "a"); // Ts... args expand to int E1, double E2, const char* E3
+                // &args... expands to &E1, &E2, &E3
+                // Us... pargs expand to int* E1, double* E2, const char** E3
+```
+
+**如果同一个模式中出现两个参数包的名称，它们会被同时展开，且必须具有相同的长度**
+
+```cpp
+template<typename...>
+struct Tuple {};
+ 
+template<typename T1, typename T2>
+struct Pair {};
+ 
+template<class... Args1>
+struct zip
+{
+    template<class... Args2>
+    struct with
+    {
+        typedef Tuple<Pair<Args1, Args2>...> type;
+        // Pair<Args1, Args2>... is the pack expansion
+        // Pair<Args1, Args2> is the pattern
+    };
+};
+ 
+typedef zip<short, int>::with<unsigned short, unsigned>::type T1;
+// Pair<Args1, Args2>... expands to
+// Pair<short, unsigned short>, Pair<int, unsigned int> 
+// T1 is Tuple<Pair<short, unsigned short>, Pair<int, unsigned>>
+ 
+// typedef zip<short>::with<unsigned short, unsigned>::type T2;
+// error: pack expansion contains packs of different lengths
+```
+
+**如果一个参数包展开嵌套在另一个参数包展开之中，那么出现在最内层参数包展开中的参数包会被最内层的展开所展开，并且在最外层的参数包展开中必须提及另一个参数包，但该参数包不能出现在最内层的展开中。换句话说，外层的展开可以包含内层展开中未被展开的参数包**
+
+```cpp
+template<class... Args>
+void g(Args... args)
+{
+    // 同时展开两个参数包 (Args 和 args)
+    f(const_cast<const Args*>(&args)...); 
+ 
+    // 嵌套的参数包展开：
+    // 内层展开是 "args...", 先被展开
+    // 外层展开是 h(args...) + args..., 后被展开
+    // 结果为 h(E1, E2, E3) + E1, h(E1, E2, E3) + E2, h(E1, E2, E3) + E3
+    f(h(args...) + args...); 
+}
+```
+
+**当参数包中的元素数量为零（空参数包）时，参数包展开的实例化不会改变封闭构造的语法解释，即使完全省略参数包展开会导致格式错误或语法歧义。这种情况下，实例化会产生一个空列表**
+
+```cpp
+template<class... Bases> 
+struct X : Bases... { };
+ 
+template<class... Args> 
+void f(Args... args) 
+{
+    X<Args...> x(args...);
+}
+ 
+// 合法：X<> 没有基类
+// x 是 X<> 类型的变量，进行值初始化
+template void f<>(); 
+```
+
+## 参数包展开示例
+
+参数包展开可以应用在很多场景中，以下是一些举例
+
+### 函数实参列表（Function argument lists）
+
+参数包展开可以出现在函数调用操作符的括号内，在这种情况下，省略号左侧最大的表达式或花括号括起来的初始化列表是将被展开的模式
+
+```cpp
+f(args...);              // expands to f(E1, E2, E3)
+f(&args...);             // expands to f(&E1, &E2, &E3)
+f(n, ++args...);         // expands to f(n, ++E1, ++E2, ++E3);
+f(++args..., n);         // expands to f(++E1, ++E2, ++E3, n);
+ 
+f(const_cast<const Args*>(&args)...);
+// f(const_cast<const E1*>(&X1), const_cast<const E2*>(&X2), const_cast<const E3*>(&X3))
+ 
+f(h(args...) + args...); // expands to 
+// f(h(E1, E2, E3) + E1, h(E1, E2, E3) + E2, h(E1, E2, E3) + E3)
+```
+
+### 函数形参列表（Function parameter lists）
+
+函数参数列表可以使用省略号（...）来定义可变参数列表。这种参数包可以出现在模板函数中，用于处理不同数量和类型的参数。
+
+```cpp
+template<typename... Ts>
+void f(Ts... args) {
+    // args 是一个参数包，包含所有传递给 f 的参数
+}
+ 
+f('a', 1); // 调用时，Ts... 展开为 char 和 int，函数签名变为 void f(char, int)
+f(0.1);    // 调用时，Ts... 展开为 double，函数签名变为 void f(double)
+
+//============================================
+template<typename... Ts, int... N>
+void g(Ts (&...arr)[N]) {
+    // Ts (&...arr)[N] 是一个参数包模式，表示多个数组引用参数
+    // arr 是参数包，包含多个数组引用
+    // N 是参数包，包含每个数组的大小
+}
+ 
+int n[1];
+ 
+g<const char, int>("a", n); 
+// 调用时，Ts (&...arr)[N] 展开为 const char (&)[2], int(&)[1]
+// "a" 是一个 const char[2]（包含 '\0'），n 是一个 int[1]
+```
+
+在 `Ts (&...arr)[N]` 中，省略号是 最内层的元素，而不是像其他参数包展开中那样作为最后一个元素。这意味着展开时，`Ts` 和 `N` 会同时被展开
+
+### 括号初始化（Parenthesized initializers）
+
+包括直接初始化、函数风格的类型转换，以及其他类似函数调用表达式的场景（如成员初始化、new 表达式等），其规则与函数调用表达式中的参数包展开规则相同
+
+```cpp
+Class c1(&args...);             // calls Class::Class(&E1, &E2, &E3)
+Class c2 = Class(n, ++args...); // calls Class::Class(n, ++E1, ++E2, ++E3);
+ 
+::new((void *)p) U(std::forward<Args>(args)...) // std::allocator::allocate
+```
+
+### 初始化列表（Brace-enclosed initializers）
+
+```cpp
+template<typename... Ts>
+void func(Ts... args)
+{
+    const int size = sizeof...(args) + 2;
+    int res[size] = {1, args..., 2};
+ 
+    // since initializer lists guarantee sequencing, this can be used to
+    // call a function on each element of a pack, in order:
+    int dummy[sizeof...(Ts)] = {(std::cout << args, 0)...};
+}
+```
+
+### 模板实例化参数列表（Template argument lists）
+
+```cpp
+template<class A, class B, class... C>
+void func(A arg1, B arg2, C... arg3)
+{
+    container<A, B, C...> t1; // expands to container<A, B, E1, E2, E3> 
+    container<C..., A, B> t2; // expands to container<E1, E2, E3, A, B> 
+    container<A, C..., B> t3; // expands to container<A, E1, E2, E3, B> 
+}
+```
+
+### 模板形参列表（Template parameter list）
+
+```cpp
+template<typename... T>     // typename... T 定义了一个模板参数包 T，它可以接受任意数量的类型参数
+struct value_holder
+{
+    // 这里的 T... 展开为一个模板参数列表，其中每个参数都是外层模板参数包 T 中的一个类型, 
+    // 参数包展开生成常量模板参数列表
+    template<T... Values> 
+    struct apply {};      // 例如：<int, char, int(&)[5]>
+};
+```
+
+### 基类多继承
+
+可变模板参数包来支持多个基类的继承，并在构造函数的成员初始化列表中使用参数包展开调用每个基类的构造函数
+
+```cpp
+template<class... Mixins>
+class X : public Mixins...
+{
+public:
+    X(const Mixins&... mixins) : Mixins(mixins)... {}
+};
+```
+
+### lambda表达式捕获组
+
+```cpp
+template<class... Args>
+void f(Args... args)
+{
+    auto lm = [&, args...] { return g(args...); };
+    lm();
+}
+```
+
+### `sizeof...`
+
+sizeof...(Types)操作符用于计算Types参数包中的类型个数
+
+```cpp
+template<class... Types>
+struct count
+{
+    static const std::size_t value = sizeof...(Types);
+};
+```
