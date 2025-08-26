@@ -341,3 +341,266 @@ struct count
     static const std::size_t value = sizeof...(Types);
 };
 ```
+
+### 动态异常（Until C++17）
+
+```cpp
+template<class... X>
+void func(int arg) throw(X...)
+{
+    // ... 在不同情况下抛出不同的X类型异常
+}
+```
+
+现代 C++ 推荐使用`noexcept`来指定函数是否可能抛出异常，`noexcept`仅表明函数是否可能抛出异常（是一个布尔属性），而动态异常规范可以指定具体的异常类型，但这一特性因实现复杂且实用性有限而被移除。
+
+### 内存对齐（Alignment Specifier）
+
+在 C++ 中，`alignas`关键字用于指定变量、类型或对象的对齐要求。当与模板参数包结合使用时，alignas支持包展开（pack expansion）。常规情况下，`alignas`可以接受两种形式的参数：类型：如`alignas(int)`；常量表达式：如`alignas(16)`表示 16 字节对齐
+
+在模板定义中，alignas可以使用包展开语法，将参数包中的每个元素作为单独的对齐说明符。
+
+```cpp
+// 模板定义
+template<class... T>
+struct Align
+{
+    alignas(T...) unsigned char buffer[128];
+};
+
+// 实例化目标
+Align<int, short> a;
+
+// 展开形式：注意展开后的对齐说明符之间是空格分隔，而非逗号
+alignas(int) alignas(short) unsigned char buffer[128];
+```
+
+展开后的多个`alignas`说明符表示该对象需要满足所有指定的对齐要求，即实际对齐值将是所有指定对齐值中的最大值。
+
+## 折叠表达式（[Fold expressions (since C++17)](https://en.cppreference.com/w/cpp/language/fold.html)）
+
+> Reduces ([folds](https://en.wikipedia.org/wiki/Fold_(higher-order_function))) a pack over a binary operator.
+
+在二元运算符上折叠参数包，**折叠表达式必须包含在括号内**，包含四种语法形式
+
+```cpp
+// 一元右折叠，Unary right fold (E op ...) becomes (E1 op (... op (EN-1 op EN)))
+( pack op ... )
+
+// 一元左折叠，Unary left fold (... op E) becomes (((E1 op E2) op ...) op EN)
+(... op pack)
+
+// 二元右折叠，Binary right fold (E op ... op I) becomes (E1 op (... op (EN−1 op (EN op I))))
+(pack op ... op init)
+
+// 二元左折叠，Binary left fold (I op ... op E) becomes ((((I op E1) op E2) op ...) op EN)
+(init op ... op pack)
+```
+
+* ops支持32种二元运算符，包括`+`、`-`、`*`、`/`、`%`、`^`、`&`、`|`、`=`、`<`、`>`、`<<`、`>>`、`+=`、`-=`、`*=`、`/=`、`%=`、`^=`、`&=`、`|=`、`<<=`、`>>=`、`==`、`!=`、`<=`、`>=`、`&&`、`||`、`,`、`.*`、`->*`。二元折叠中两个op必须相同。
+* pack：含未展开参数包的表达式，顶层不含优先级低于 cast 的运算符（即 cast-expression）。
+* init：不含未展开参数包的表达式，顶层不含优先级低于 cast 的运算符（即 cast-expression）。
+* 一元折叠中参数包长度为 0 时，仅允许以下运算符：`&&`：结果为`true` `||`：结果为`false` `,`：结果为`void()`
+
+## lambda捕获组中的参数包（[Lambda capture](https://en.cppreference.com/w/cpp/language/lambda.html#Lambda_capture)）
+
+语法结构
+
+```cpp
+... identifier initializer      // by-copy capture with an initializer that is a pack expansion
+
+& ... identifier initializer    // by-reference capture with an initializer that is a pack expansion
+```
+
+## 结构化绑定参数包（[Structured binding declaration (since C++17)](https://en.cppreference.com/w/cpp/language/structured_binding.html)）
+
+> [Structured Binding Upgrades in C++26](https://biowpn.github.io/bioweapon/2024/12/03/structured-bindings-cpp26.html)
+>
+> [Structured Bindings can introduce a Pack](https://isocpp.org/files/papers/P1061R10.html)
+
+结构化绑定(在C++17倍引入)：用于将聚合类型（数组、结构体、std::pair、std::tuple等）的成员 “解包” 到变量中，简化对复合类型的访问
+
+```cpp
+auto [a, b] = std::make_pair(1, "hello"); // 解包pair，a=1，b="hello"
+int arr[3] = {10, 20, 30};
+auto [x, y, z] = arr; // 解包数组，x=10，y=20，z=30
+```
+
+P1061 提案的核心是通过结构化绑定语法auto [...xs] = p;，将聚合类型（如结构体、数组等）的成员转换为参数包，从而简化泛型编程中对复合类型成员的批量处理。
+
+* 无缝转换结构体为参数包：例如通过以下函数可将任意类型T的成员转换为std::tie形式的参数包，为反射场景提供基础：
+
+```cpp
+template <class T>
+auto tie_as_tuple(T& x) {
+    auto& [...xs] = x; // 结构化绑定生成参数包xs...
+    return std::tie(xs...);
+}
+```
+
+* 适用范围广泛：不仅支持结构体（聚合类型），还可通过特化std::tuple_size、std::tuple_element及提供get函数，扩展到其他类类型，无需依赖复杂的 hacks
+  
+1061 最初的目标更为宏大：在非模板场景中也能通过结构化绑定引入参数包，例如：
+
+```cpp
+struct Point { int x, y; };
+int main() {
+    Point p{3, 4};
+    auto [...cords] = p; // 尝试在main（非模板）中直接生成参数包cords...
+    auto dist_sq = (cords * cords + ...); // 配合折叠表达式使用
+}
+```
+
+为实现这一目标，提案曾引入 **“隐式模板区域（implicit template region）”** 概念：在非模板场景中使用结构化绑定包时，自动将附近代码视为 “类模板区域”，以支持参数包语法。但这一策略最终因实现复杂性（如编译器处理逻辑、兼容性等问题）在 R9 版本后被放弃。
+
+由于上述挑战，最终纳入 C++26 的是简化版 P1061：结构化绑定仅能在模板中引入参数包，非模板场景中直接使用会报错：
+
+```cpp
+// 非模板场景直接使用（错误）
+struct Point { int x, y; };
+int main() {
+    Point p{3, 4};
+    auto [...cords] = p; // 不允许
+}
+```
+
+但非模板场景可通过显式引入模板区域间接实现，例如用 lambda 创建局部模板上下文：
+
+```cpp
+struct Point { int x, y; };
+int main() {
+    Point p{3, 4};
+    // 通过lambda的模板参数（隐式auto）创建模板区域
+    [&](auto& _p) {
+        auto [...cords] = _p; // 合法，cords...为参数包
+    }(p);
+}
+```
+
+这与 “隐式模板区域” 的设计思路类似，只是需要手动触发。
+
+## 参数包访问（[Pack indexing (since C++26)](https://en.cppreference.com/w/cpp/language/pack_indexing.html)）
+
+参数包索引（Pack Indexing）是C++26引入的新特性，允许通过编译时索引直接访问参数包（parameter pack）中的元素，语法类似数组索引。这一特性简化了模板中对参数包特定元素的访问，无需依赖递归模板或辅助元函数。
+
+参数包索引允许在模板中通过`pack[index]`的形式访问参数包中的第`index`个元素（索引从0开始）。其支持两种参数包：
+
+- **类型参数包（type pack）**：如`Ts...`，通过`Ts[N]`访问第`N`个类型；
+- **值参数包（value pack）**：如`args...`，通过`args[N]`访问第`N`个值。
+
+**语法规则**：
+
+- 索引`N`必须是编译时常量表达式（`constexpr`）；
+- 索引范围为`[0, sizeof...(pack) - 1]`，超出范围会导致编译错误；
+- 参数包不能为空（除非索引在有效范围内，但空包无元素，因此索引必然无效）。
+
+下面是一个类型参数包索引的例子：
+
+```cpp
+template <typename... Ts>
+struct TypePackExample {
+    // 访问第0个类型（第一个类型）
+    using FirstType = Ts[0];
+    // 访问第2个类型（第三个类型，若参数包长度≥3）
+    using ThirdType = Ts[2];
+};
+
+// 实例化：Ts = [int, double, std::string]
+using MyPack = TypePackExample<int, double, std::string>;
+static_assert(std::is_same_v<MyPack::FirstType, int>);         // 正确
+static_assert(std::is_same_v<MyPack::ThirdType, std::string>); // 正确
+```
+
+值参数包索引用于访问函数或模板中值参数包的特定元素，可直接获取参数包中第`N`个值。
+
+```cpp
+template <auto... Args>
+constexpr auto get_value_at(size_t index) {
+    // 通过索引返回参数包中的值（编译时确定）
+    return Args[index];
+}
+
+constexpr auto val0 = get_value_at<10, 20, 30>(0); // val0 = 10
+constexpr auto val2 = get_value_at<10, 20, 30>(2); // val2 = 30
+```
+
+可与折叠表达式、结构化绑定等结合使用，例如从参数包中提取特定元素组成新包：
+
+```cpp
+template <typename... Ts>
+auto extract_pair(Ts&&... args) {
+    return std::make_pair(args[0], args[1]); // 提取前两个元素
+}
+```
+
+## 参数包的调试技巧
+
+1. **打印参数包大小和类型**
+
+```cpp
+template <typename... Args>
+void debug_args(Args&&... args) {
+    std::cout << "参数包大小: " << sizeof...(args) << std::endl;
+    
+    std::cout << "参数类型: ";
+    ((std::cout << typeid(args).name() << " "), ...);
+    std::cout << std::endl;
+}
+```
+
+2. **分步调试复杂的参数包展开**
+
+```cpp
+template <typename T>
+void debug_single(T&& arg) {
+    std::cout << "单个参数: " << arg << " (类型: " << typeid(arg).name() << ")" << std::endl;
+}
+
+template <typename... Args>
+void debug_step_by_step(Args&&... args) {
+    (debug_single(std::forward<Args>(args)), ...);
+}
+```
+
+## 一些示例
+
+### 内存池
+
+在一个需要频繁分配小对象的系统中，我们使用参数包实现了高效的内存池：
+
+**优化前**：标准分配器
+
+```cpp
+template <typename T>
+T* create() {
+    return new T();
+}
+
+template <typename T, typename Arg>
+T* create(Arg&& arg) {
+    return new T(std::forward<Arg>(arg));
+}
+
+template <typename T, typename Arg1, typename Arg2>
+T* create(Arg1&& arg1, Arg2&& arg2) {
+    return new T(std::forward<Arg1>(arg1), std::forward<Arg2>(arg2));
+}
+
+// 更多重载...
+```
+
+**优化后**：基于参数包的内存池
+
+```cpp
+template <typename T, typename... Args>
+T* create(Args&&... args) {
+    void* memory = memory_pool_.allocate(sizeof(T), alignof(T));
+    
+    try {
+        return new(memory) T(std::forward<Args>(args)...);
+    } catch (...) {
+        memory_pool_.deallocate(memory);
+        throw;
+    }
+}
+```

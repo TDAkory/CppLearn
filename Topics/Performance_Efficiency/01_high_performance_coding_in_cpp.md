@@ -1357,5 +1357,380 @@ struct GeneratedFunctorImpl {
 
 > Proxy Objects and Lazy Evaluation
 
+First and foremost, the techniques used in this chapter are used to hide optimizations in a library from the user of that library. This is useful because exposing every single optimization technique as a separate function requires a lot of attention and education from the user of the library. It also bloats the code base with a multitude of specific functions, making it hard to read and understand. By using proxy objects, we can achieve optimizations under the hood; the resultant code is both optimized and readable.
 
+**Lazy evaluation** is a technique used to postpone an operation until its result is really needed. The opposite, where operations are performed right away, is called **eager evaluation**.
 
+* 延迟执行：所有计算仅在必要时触发（如比较、赋值），避免提前消耗资源。
+* 零额外开销：代理对象仅存储引用或指针，不复制原始数据，符合 “零成本抽象” 原则。
+* 语法透明性：通过运算符重载使代理对象的使用方式与原始对象一致，不破坏代码可读性。
+
+一个简单的例子：
+
+```cpp
+class Image { /* ... */ };                   // Buffer with JPG data
+auto load(std::string_view path) -> Image;   // Load image at path
+class ScoreView {
+public:
+  // Eager, requires loaded bonus image
+  void display(const Image& bonus);
+  // Lazy, only load bonus image if necessary
+  void display(std::function<Image()> bonus);
+  // ...
+}; 
+
+// Always load bonus image eagerly
+const auto eager = load("/images/stars.jpg");
+score.display(eager); 
+
+// Load default image lazily if needed
+auto lazy = [] { return load("/images/stars.jpg"); }; 
+score.display(lazy); 
+```
+
+A technique for hiding the fact that the code evaluates lazily is to use **proxy objects**.
+
+### 使用代理对象的一些例子
+
+1. 通过代理对象延迟字符串拼接操作，避免创建临时对象以提升性能。
+
+```cpp
+class StringProxy {
+private:
+    const std::string& left_;
+    const std::string& right_;
+public:
+    StringProxy(const std::string& l, const std::string& r) : left_(l), right_(r) {}
+
+    // 延迟拼接，仅在需要时执行
+    operator std::string() const {
+        return left_ + right_;
+    }
+
+    // 重载比较运算符，直接操作原始字符串避免拼接
+    bool operator==(const std::string& other) const {
+        if (left_.size() + right_.size() != other.size()) return false;
+        return other.substr(0, left_.size()) == left_ &&
+               other.substr(left_.size()) == right_;
+    }
+};
+
+// 使用示例
+std::string a = "Hello", b = "World";
+StringProxy proxy(a, b);
+if (proxy == "HelloWorld") {  // 不触发拼接，直接比较
+    std::string s = proxy;    // 此时才执行拼接
+}
+```
+
+2. 二维向量长度比较场景，通过LengthProxy延迟sqrt计算，仅在必要时执行
+
+```cpp
+class Vector2D {
+private:
+    float x_, y_;
+public:
+    Vector2D(float x, float y) : x_(x), y_(y) {}
+
+    // 返回代理对象而非直接计算长度
+    class LengthProxy {
+    private:
+        const Vector2D& vec_;
+    public:
+        LengthProxy(const Vector2D& v) : vec_(v) {}
+
+        // 延迟计算：仅在比较时执行sqrt
+        bool operator<(const LengthProxy& other) const {
+            // 比较平方值以避免sqrt，进一步优化
+            return (vec_.x_ * vec_.x_ + vec_.y_ * vec_.y_) <
+                   (other.vec_.x_ * other.vec_.x_ + other.vec_.y_ * other.vec_.y_);
+        }
+    };
+
+    LengthProxy length() const { return LengthProxy(*this); }
+};
+
+// 使用示例
+Vector2D v1(3, 4), v2(1, 2);
+if (v1.length() < v2.length()) {  // 不计算sqrt，直接比较平方和
+    // ...
+}
+```
+
+3. 利用代理对象和运算符重载实现类似 “扩展方法” 的链式调用
+
+```cpp
+// 代理类：包装值并支持管道操作
+template <typename T>
+class PipeProxy {
+private:
+    T value_;
+public:
+    PipeProxy(T val) : value_(std::move(val)) {}
+
+    // 重载管道运算符，接收函数并返回新代理
+    template <typename F>
+    auto operator|(F&& func) const {
+        return PipeProxy<std::invoke_result_t<F, T>>(func(value_));
+    }
+
+    // 提取最终值
+    const T& get() const { return value_; }
+};
+
+// 示例函数：字符串处理
+std::string to_upper(const std::string& s) {
+    std::string res = s;
+    std::transform(res.begin(), res.end(), res.begin(), ::toupper);
+    return res;
+}
+
+std::string trim(const std::string& s) {
+    auto start = s.begin();
+    while (start != s.end() && std::isspace(*start)) start++;
+    auto end = s.end();
+    while (end != start && std::isspace(*(end-1))) end--;
+    return std::string(start, end);
+}
+
+// 使用示例
+std::string s = "  hello world  ";
+auto result = PipeProxy(s) | trim | to_upper;  // 链式调用
+std::cout << result.get();  // 输出 "HELLO WORLD"
+```
+
+## 11. 并发
+
+### 并发和并行
+
+并发（Concurrency）
+
+* **任务执行方式** ：多个任务同时处于执行状态，但它们可能并不是同时在物理上执行。在单核处理器系统中，操作系统通过快速切换任务（时间片轮转）来让多个务交替执行，给人以同时执行的错觉。
+* **关注重点** ：在于让多个任务同时进行，充分利用系统资源，提高整体效率，强调的是任务的执行方式和调度机制。
+* **实现方式** ：可以通过多线程、进程间通信、协程等方式来实现，不依赖硬件的多核支持。
+* **性能提升** ：在单核上并发执行任务不一定能提高执行速度，甚至可能因为任务切换开销而变慢，但在多核环境下可以提升效率。
+* **适用场景** ：适用于 I/O 密集型任务，如网络请求、文件读写等，任务等待时间长，通过并发可以提高资源利用率。
+
+并行（Parallelism）
+
+* **任务执行方式** ：多个任务同时在多个处理器或核心上同时执行，真正利用了多核硬件资源来加速任务执行。
+* **关注重点** ：在于任务的分解和同时执行，以减少完成任务所需的时间，强调的是任务的实际同时执行和计算能力的提升。
+* **实现方式** ：依赖于多核处理器或多个计算节点，在每个处理器或核心上分配子任务同时执行。
+* **性能提升** ：能充分利用多核硬件资源，显著提高任务执行速度，理论上性能提升与处理器核心数成正比。
+* **适用场景** ：适用于计算密集型任务，如科学计算、大数据处理等，需要大量计算资源，通过并行可以快速得到结果。
+
+#### 共享内存
+
+#### 数据竞争
+
+避免数据竞争：
+
+* 使用原子数据类型而不是int。这将告诉编译器以原子方式执行读取、增加和写入。我们将在本章后面花更多时间讨论原子数据类型。
+
+* 使用互斥锁（mutex）来保证多个线程永远不会同时执行关键部分。关键部分是代码中不得同时执行的地方，因为它更新或读取可能会产生数据竞争的共享内存。
+
+#### 互斥锁和临界区
+
+互斥锁，是用于避免数据竞争的同步原语。需要进入临界区的线程首先需要锁定互斥锁
+
+#### 死锁
+
+使用互斥锁保护共享资源时，存在陷入死锁状态的风险。当两个线程互相等待对方释放锁时，就会发生死锁。
+
+### 并发编程
+
+```cpp
+std::this_thread::get_id();  // 获取线程标识符
+
+std::this_thread::sleep_for(std::chrono::seconds{1});  // 线程休眠
+
+std::thread::hardware_concurrency(); // 硬件线程的总数
+```
+
+[**C++20 `jthread`**](https://en.cppreference.com/w/cpp/thread/jthread.html)
+
+C++20 引入了 `std::jthread`，它是一种更智能的线程管理方式，解决了 `std::thread` 在生命周期管理和线程取消方面的不足。
+
+`std::jthread` 对象在被销毁时会自动调用 `join()` 方法，确保在对象生命周期结束时，关联的线程会完成或终止。这避免了手动调用 `join` 或 `detach` 的麻烦，以及可能引发的资源泄漏问题。
+
+```cpp
+std::jthread jthr{[]{std::this_thread::sleep_for(std::chrono::seconds(1));}};
+// jthr 自动 join，无需手动调用
+```
+
+`std::jthread` 与 `std::stop_source` 和 `std::stop_token` 紧密集成，允许外部请求线程停止。线程函数可以通过检查 `std::stop_token` 的状态来优雅地停止执行。
+
+```cpp
+auto stop_source = std::stop_source{};
+std::jthread jthr{[&]{ 
+    std::stop_token stok = stop_source.get_token();
+    while (!stok.stop_requested()) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+}}; 
+stop_source.request_stop(); // 外部请求线程停止
+```
+
+**使用`std::mutex`保护关键部分**
+
+```cpp
+#include <mutex>
+#include <thread>
+#include <cassert>
+
+std::mutex counter_mutex; // 用于保护counter的互斥锁
+int counter = 0;
+
+void increment_counter(int n) {
+    for (int i = 0; i < n; ++i) {
+        std::lock_guard<std::mutex> lock(counter_mutex); // 自动管理锁
+        ++counter;
+    }
+}
+```
+
+**避免死锁，死锁是指两个或多个线程因为等待对方释放资源而无法继续执行的情况。为了避免死锁，可以使用std::lock()函数同时锁定多个互斥锁**
+
+```cpp
+#include <mutex>
+
+struct Account {
+    int balance_ = 0;
+    std::mutex m_;
+};
+
+void transfer_money(Account& from, Account& to, int amount) {
+    std::unique_lock<std::mutex> lock1(from.m_, std::defer_lock);
+    std::unique_lock<std::mutex> lock2(to.m_, std::defer_lock);
+    std::lock(lock1, lock2);
+
+    from.balance_ -= amount;
+    to.balance_ += amount;
+}
+```
+
+**使用条件变量协调线程**
+
+```cpp
+#include <condition_variable>
+#include <queue>
+#include <thread>
+
+std::condition_variable cv;
+std::queue<int> q;
+std::mutex mtx; // 保护共享队列
+const int sentinel = -1;
+
+void print_ints() {
+    int i = 0;
+    while (i != sentinel) {
+        std::unique_lock<std::mutex> lock(mtx);
+        cv.wait(lock, [] { return !q.empty(); });
+        i = q.front();
+        q.pop();
+        if (i != sentinel) {
+            std::cout << "Got: " << i << '\n';
+        }
+    }
+}
+
+void generate_ints() {
+    for (int i : {1, 2, 3, sentinel}) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        std::lock_guard<std::mutex> lock(mtx);
+        q.push(i);
+        cv.notify_one();
+    }
+}
+
+int main() {
+    std::jthread producer(generate_ints);
+    std::jthread consumer(print_ints);
+}
+```
+
+**使用`std::future`和`std::promise`处理返回值和错误**
+
+```cpp
+#include <exception>
+#include <future>
+#include <iostream>
+
+std::promise<int> p;
+
+void divide(int a, int b) {
+    if (b == 0) {
+        std::runtime_error e("Divide by zero exception");
+        p.set_exception(std::make_exception_ptr(e));
+    } else {
+        int result = a / b;
+        p.set_value(result);
+    }
+}
+
+int main() {
+    std::thread(divide, 45, 5).detach();
+    std::future<int> f = p.get_future();
+    try {
+        const int& result = f.get();
+        std::cout << "Result: " << result << '\n';
+    } catch (const std::exception& e) {
+        std::cout << "Caught exception: " << e.what() << '\n';
+    }
+}
+```
+
+`std::packaged_task`是一个可调用对象，它可以自动创建`std::promise`和`std::future`
+
+```cpp
+#include <future>
+#include <iostream>
+
+int divide(int a, int b) {
+    if (b == 0) {
+        throw std::runtime_error("Divide by zero exception");
+    }
+    return a / b;
+}
+
+int main() {
+    std::packaged_task<int(int, int)> task(divide);
+    std::future<int> f = task.get_future();
+    std::thread(std::move(task), 45, 5).detach();
+
+    try {
+        const int& result = f.get();
+        std::cout << "Result: " << result << '\n';
+    } catch (const std::exception& e) {
+        std::cout << "Caught exception: " << e.what() << '\n';
+    }
+}
+```
+
+`std::async`是一个函数模板，可以自动创建`std::packaged_task`和`std::thread`
+
+```cpp
+#include <future>
+#include <iostream>
+
+int divide(int a, int b) {
+    if (b == 0) {
+        throw std::runtime_error("Divide by zero exception");
+    }
+    return a / b;
+}
+
+int main() {
+    std::future<int> f = std::async(divide, 45, 5);
+    try {
+        const int& result = f.get();
+        std::cout << "Result: " << result << '\n';
+    } catch (const std::exception& e) {
+        std::cout << "Caught exception: " << e.what() << '\n';
+    }
+}
+```
+
+#### C++20中的同步原语
+
+详见 [C++20 Additional synchronization primitives]()
