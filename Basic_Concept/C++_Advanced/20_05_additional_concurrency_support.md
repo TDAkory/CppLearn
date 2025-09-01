@@ -2,6 +2,21 @@
 
 > [C++对并发的支持](https://en.cppreference.com/w/cpp/atomic.html)
 
+根据 cppreference 的描述看，C++20新增的支持并发编程的语言工具包括如下：
+
+* [jthread(C++20)](https://en.cppreference.com/w/cpp/thread/jthread.html) std::thread with support for auto-joining and cancellation
+* Cooperative cancellation (since C++20)
+* [atomic_ref(C++20)](https://en.cppreference.com/w/cpp/atomic/atomic_ref.html) provides atomic operations on non-atomic objects
+* new Atomic operations [atomic_wait](https://en.cppreference.com/w/cpp/atomic/atomic_wait.html)、[atomic_nofiry_one](https://en.cppreference.com/w/cpp/atomic/atomic_notify_one.html)、[atomic_notify_all](https://en.cppreference.com/w/cpp/atomic/atomic_notify_all.html)、etc
+* Semaphores (since C++20) [counting_semaphore](https://en.cppreference.com/w/cpp/thread/counting_semaphore.html)、[binary_semaphore](https://en.cppreference.com/w/cpp/thread/counting_semaphore.html)
+* Latches and Barriers (since C++20) [latch](https://en.cppreference.com/w/cpp/thread/latch.html)、[barrier](https://en.cppreference.com/w/cpp/thread/barrier.html)
+
+下面我们通过一些基本的例子来学习如何使用这些新的工具
+
+## `std::jthread`
+
+
+
 # C++20并发编程新特性：同步原语的革命性增强
 
 C++20标准为并发编程带来了一系列重要更新，特别是新增的同步原语填补了之前标准在多线程协作方面的空白。这些标准化组件不仅简化了并发代码的编写，还提高了程序的性能和可移植性。本文将深入解析C++20中引入的核心同步机制，包括`std::latch`、`std::barrier`和`std::semaphore`，并通过实用示例展示它们如何解决实际开发中的并发挑战。
