@@ -15,6 +15,272 @@
 
 ## `std::jthread`
 
+`std::jthread` 是 C++20 引入的线程类，继承自 `std::thread`，与 std::thread 有着相同的基本行为。
+
+核心特性是自动管理线程生命周期（析构时会自动 `join`，避免资源泄漏），并原生支持停止令牌（stop token）机制，可协作式请求线程停止。
+
+与 `std::thread` 相比，它解决了忘记 `join` 导致的未定义行为问题，同时通过 `std::stop_source`、`std::stop_token` 和 `std::stop_callback` 提供了安全的线程停止协作方式。
+
+`std::jthread` 在逻辑上持有一个 `std::stop_source` 类型的内部私有成员，该成员维护一个共享的停止状态。`std::jthread` 构造函数接受一个以 `std::stop_token` 作为第一个参数的函数，`jthread` 会从其内部的 `std::stop_source` 中传递这个参数。这使得该函数可以在执行过程中检查是否已请求停止，并在请求停止时返回。
+
+`std::jthread` 对象也可能处于不代表任何线程的状态（在默认构造、移动、分离或连接之后），一个执行线程也可能不与任何 `jthread` 对象相关联（在分离之后）。
+
+没有两个 `std::jthread` 对象可以代表同一个执行线程；`std::jthread` 不可复制构造或复制赋值，但它可移动构造和移动赋值。
+
+预期相关的概念如下：
+
+* [std::jthread::get_stop_source](https://en.cppreference.com/w/cpp/thread/jthread/get_stop_source.html)
+* [std::jthread::get_stop_token](https://en.cppreference.com/w/cpp/thread/jthread/get_stop_token.html)
+* [std::jthread::request_stop](https://en.cppreference.com/w/cpp/thread/jthread/request_stop.html)
+* [std::stop_callback](https://en.cppreference.com/w/cpp/thread/stop_callback.html)
+
+**示例一**：普通用法，不需要像 `std::thread` 一样，关心对象在主线程退出时 `join`。[godbolt](https://godbolt.org/z/bz9dcdxYo)
+
+```cpp
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <string>
+
+void print_hello() {
+    std::cout << "Hello from jthread! (No args)\n";
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+}
+
+void print_message(const std::string& msg, int count) {
+    for (int i = 0; i < count; ++i) {
+        std::cout << "Message: " << msg << " (Count: " << i + 1 << ")\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+}
+
+int main() {
+    std::cout << "Main thread start\n";
+
+    std::jthread t1(print_hello);
+
+    std::jthread t2(print_message, "CppReference", 3);
+
+    std::cout << "Main thread end\n";
+
+    return 0;
+}
+```
+
+**示例二**：协作式停止，通过 `stop_token` 检查停止请求，`request_stop()` 触发停止，实现线程安全退出。[godbolt](https://godbolt.org/z/7qcjqv91M)
+
+```cpp
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <stop_token>
+
+void periodic_task(std::stop_token stoken, const std::string& task_name) {
+    std::cout << "Task '" << task_name << "' started (press Enter to stop)\n";
+    
+    while (!stoken.stop_requested()) {
+        std::cout << "Task '" << task_name << "' running...\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    
+    std::cout << "Task '" << task_name << "' stopped gracefully\n";
+}
+
+int main() {
+    std::jthread worker(periodic_task, "Heartbeat");
+
+    std::cout << "Main thread: Before stop\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    std::cout << "Main thread: Request stop\n";
+    worker.request_stop();
+    std::cout << "Main thread end\n";
+    return 0;
+}
+
+// Main thread: Before stop
+// Task 'Heartbeat' started (press Enter to stop)
+// Task 'Heartbeat' running...
+// Task 'Heartbeat' running...
+// Task 'Heartbeat' running...
+// Task 'Heartbeat' running...
+// Task 'Heartbeat' running...
+// Main thread: Request stop
+// Main thread end
+// Task 'Heartbeat' stopped gracefully
+```
+
+**示例三**：`stop_source`可以被多个 jthread 共享。[godbolt](https://godbolt.org/z/bsaovbMz9)
+
+```cpp
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <stop_token>
+#include <mutex>
+#include <vector>
+
+std::mutex cout_mutex;
+
+void shared_task(std::stop_token stoken, int thread_id) {
+    {
+        std::lock_guard<std::mutex> lock(cout_mutex);
+        std::cout << "Thread " << thread_id << " started\n";
+    }
+
+    while (!stoken.stop_requested()) {
+        {
+            std::lock_guard<std::mutex> lock(cout_mutex);
+            std::cout << "Thread " << thread_id << " working\n";
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(cout_mutex);
+        std::cout << "Thread " << thread_id << " stopped\n";
+    }
+}
+
+int main() {
+    const int thread_count = 3;  
+    std::vector<std::jthread> threads;
+    std::stop_source global_stop_source;  
+
+    for (int i = 0; i < thread_count; ++i) {
+        threads.emplace_back(shared_task, global_stop_source.get_token(), i);
+    }
+
+    std::cout << "Main thread: Waiting 2 seconds to stop all threads...\n";
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    std::cout << "Main thread: Stopping all threads...\n";
+    global_stop_source.request_stop();
+
+    std::cout << "Main thread end\n";
+    return 0;
+}
+
+// Thread 0 started
+// Thread 0 working
+// Main thread: Waiting 2 seconds to stop all threads...
+// Thread 1 started
+// Thread 1 working
+// Thread 2 started
+// Thread 2 working
+// Thread 0 working
+// Thread 1 working
+// Thread 2 working
+// Thread 0 working
+// Thread 2 working
+// Thread 1 working
+// Main thread: Stopping all threads...
+// Main thread end
+// Thread 0 stopped
+// Thread 1 stopped
+// Thread 2 stopped
+```
+
+**示例四**：通过 std::stop_callback 在 std::jthread 退出时自动清理资源。[godbolt](https://godbolt.org/z/nda18fseW)
+
+```cpp
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <stop_token>
+#include <string>
+
+struct Resource {
+    std::string name;
+    Resource(const std::string& n) : name(n) {
+        std::cout << "Resource '" << name << "' created\n";
+    }
+    ~Resource() {
+        std::cout << "Resource '" << name << "' destroyed (cleanup done)\n";
+    }
+};
+
+void long_running_task(std::stop_token stoken) {
+    Resource task_resource("TaskBuffer");
+
+    std::stop_callback callback(stoken, [&]() {
+        std::cout << "Stop callback triggered: Preparing to stop...\n";
+    });
+
+    std::cout << "Long-running task started\n";
+    int count = 0;
+    while (!stoken.stop_requested() && count < 10) {
+        std::cout << "Task iteration " << ++count << "\n";
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    std::cout << "Long-running task finished\n";
+}
+
+int main() {
+    std::jthread task_thread(long_running_task);
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::cout << "Main thread: Requesting task stop...\n";
+    task_thread.request_stop();
+
+    std::cout << "Main thread end\n";
+    return 0;
+}
+
+// Resource 'TaskBuffer' created
+// Long-running task started
+// Task iteration 1
+// Task iteration 2
+// Main thread: Requesting task stop...
+// Stop callback triggered: Preparing to stop...
+// Main thread end
+// Long-running task finished
+// Resource 'TaskBuffer' destroyed (cleanup done)
+```
+
+## 协作退出
+
+上面提到的 `stop_source`、`stop_token` 和 `stop_callback` 组件可用于异步请求操作及时停止执行，这种请求被称为停止请求（stop request）。
+
+这些组件规定了对**停止状态（stop state）** 进行共享访问的语义：
+
+* 任何引用同一停止状态的 `stop_source`、`stop_token` 或 `stop_callback` 对象，分别称为**关联的**停止源、停止令牌或停止回调。
+* C++26 起引入了 `stoppable-source`、`stoppable_token` 和 `stoppable-callback-for` 概念，分别规定了这些组件所需的语法和模型语义。
+
+这些组件主要设计用于以下场景：
+
+1. **协作式取消执行**：如 `std::jthread` 中的线程停止机制，允许安全地请求线程终止而不强制中断。
+2. **中断等待函数**：可用于中断 `std::condition_variable_any` 的等待函数，实现更灵活的线程唤醒机制。
+3. **异步操作的停止完成**：C++26 起支持对 `execution::connect` 创建的异步操作执行停止完成逻辑。
+4. **自定义执行管理实现**：为各种并发场景提供标准化的停止协作机制。
+
+实际上，它们甚至不需要用于"停止"操作，还可作为**线程安全的一次性函数调用触发器**使用。
+
+从上一节的示例也可以看出，这些组件形成一个协作系统：
+
+* `stop_source` 是停止请求的发起者，可生成 `stop_token` 并触发停止请求
+* `stop_token` 是停止状态的观察者，用于检查是否有停止请求
+* `stop_callback` 注册在 `stop_token` 上，当停止请求发生时自动执行
+
+| 类别 | 名称（版本） | 描述 |
+|------|------|------|
+| **Stop token types** | `stop_token`(C++20) | 用于查询是否已发出 `std::jthread` 取消请求的接口（类） |
+|  | `never_stop_token`(C++26) | 提供一种永远不可能也不会被请求停止的停止令牌接口（类） |
+|  | `inplace_stop_token`(C++26) | 引用其关联的 `std::inplace_stop_source` 对象的停止状态的停止令牌（类） |
+| **Stop source types** | `stop_source`(C++20) | 表示请求停止一个或多个 `std::jthread` 的类（类） |
+|  | `inplace_stop_source`(C++26) | 作为停止状态唯一所有者的可停止源（类） |
+| **Stop callback types** | `stop_callback`(C++20) | 用于在 `std::jthread` 取消时注册回调的接口（类模板） |
+|  | `inplace_stop_callback`(C++26) | 用于 `std::inplace_stop_token` 的停止回调（类模板） |
+|  | `stop_callback_for_t`(C++26) | 获取给定停止令牌类型的回调类型（别名模板） |
+| **Concepts** (since C++20) | `stoppable_token`(C++26) | 指定允许查询停止请求和停止请求是否可能的停止令牌基本接口（概念） |
+|  | `unstoppable_token`(C++26) | 指定不允许停止的停止令牌（概念） |
+|  | `stoppable-source`(C++26) | 指定一种类型是关联停止令牌的工厂，并且可以对其发出停止请求（仅说明性概念*） |
+|  | `stoppable-callback-for`(C++26) | 指定用于向给定停止令牌类型注册回调的接口（仅说明性概念*） |
+
+> 注：以上内容定义于头文件 `<stop_token>` 中
+
+## [std::atomic_ref](https://en.cppreference.com/w/cpp/atomic/atomic_ref.html)
+
 
 
 # C++20并发编程新特性：同步原语的革命性增强
