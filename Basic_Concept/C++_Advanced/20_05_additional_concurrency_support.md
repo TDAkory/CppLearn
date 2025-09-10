@@ -281,6 +281,261 @@ int main() {
 
 ## [std::atomic_ref](https://en.cppreference.com/w/cpp/atomic/atomic_ref.html)
 
+C++11 引入的 `std::atomic` 提供了强大的原子操作支持，但它存在一个限制：必须在定义时就确定为原子类型。
+
+C++20 带来了一个革命性的新特性 `std::atomic_ref`，允许我们对已经存在的非原子对象进行原子操作，为多线程编程提供了更大的灵活性。
+
+`std::atomic_ref` 模板使非原子对象能够享受原子操作，无需改变其原始类型定义
+
+在 `std::atomic_ref` 的生命周期内，被其引用的对象被视为原子对象，对该对象的读写操作遵循C++内存模型，得到线程安全的保证。
+
+`std::atomic_ref` 引用对象的生命周期必须比 `std::atomic_ref` 自身的生命周期更长。存在 `std::atomic_ref` 引用期间，必须仅通过 `std::atomic_ref` 访问目标对象。被 `std::atomic_ref` 对象引用的任何对象的子对象，都不得被其他 `std::atomic_ref` 对象同时引用。
+
+通过 `std::atomic_ref` 对对象应用的原子操作，与通过引用同一对象的任何其他 `std::atomic_ref` 应用的原子操作之间具有原子性。
+
+与引用类似，`std::atomic_ref` 的常量性是浅层的——可以通过 `const` 限定的 `std::atomic_ref` 对象修改被引用的值。
+
+> std::atomic_ref is CopyConstructible.
+
+一个概念性的例子如下：
+
+```cpp
+#include <atomic>
+
+int regular_int = 42;
+std::atomic_ref<int> atomic_view(regular_int);
+
+atomic_view.store(100);
+int value = atomic_view.load();
+```
+
+一个计数器的例子如下：
+
+```cpp
+#include <atomic>
+#include <iostream>
+#include <thread>
+#include <vector>
+
+int main() {
+    int counter = 0;
+    
+    auto increment = [&counter]() {
+        std::atomic_ref<int> atomic_counter(counter);
+        for (int i = 0; i < 1000; ++i) {
+            atomic_counter.fetch_add(1, std::memory_order_relaxed);
+        }
+    };
+    
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 10; ++i) {
+        threads.emplace_back(increment);
+    }
+    
+    for (auto& t : threads) {
+        t.join();
+    }
+    
+    std::cout << counter << std::endl;  // 10000
+    return 0;
+}
+```
+
+`atomic_ref` 的构造中隐含着变量的内促对齐要求
+
+```cpp
+template< class T >
+struct atomic_ref {
+    //  If obj is not aligned to required_alignment, the behavior is undefined.
+    explicit atomic_ref(T& obj) noexcept;
+    
+    atomic_ref(const atomic_ref& other) noexcept;
+};
+
+static constexpr std::size_t required_alignment = /*implementation-defined*/;   // (since C++20)
+
+// 确保正确的内存对齐
+struct alignas(std::atomic_ref<int>::required_alignment) AlignedData {
+    int value;
+};
+
+AlignedData data;
+std::atomic_ref<int> atomic_ref(data.value);  // 安全
+```
+
+一个性能对比的简单例子：[godbolt](https://godbolt.org/z/x9da5xz57)
+
+```cpp
+#include <atomic>
+#include <chrono>
+#include <iostream>
+#include <thread>
+#include <vector>
+
+void benchmark_atomic() {
+    std::atomic<int> counter(0);
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 4; ++i) {
+        threads.emplace_back([&counter]() {
+            for (int j = 0; j < 1000000; ++j) {
+                counter.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    
+    for (auto& t : threads) t.join();
+    
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "std::atomic 耗时: " << duration.count() << "ms, 结果: " << counter << std::endl;
+}
+
+void benchmark_atomic_ref() {
+    int counter = 0;
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 4; ++i) {
+        threads.emplace_back([&counter]() {
+            std::atomic_ref<int> atomic_counter(counter);
+            for (int j = 0; j < 1000000; ++j) {
+                atomic_counter.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    
+    for (auto& t : threads) t.join();
+    
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "std::atomic_ref 耗时: " << duration.count() << "ms, 结果: " << counter << std::endl;
+}
+
+
+int main() {
+    benchmark_atomic();
+    benchmark_atomic_ref();
+}
+
+// std::atomic 耗时: 26ms, 结果: 4000000
+// std::atomic_ref 耗时: 24ms, 结果: 4000000
+```
+
+## [std::atomic_wait](https://en.cppreference.com/w/cpp/atomic/atomic_wait.html)
+
+```cpp
+// 1)
+template< class T >
+void atomic_wait(const std::atomic<T>* object,
+                 typename std::atomic<T>::value_type old );
+// 2)
+template< class T >
+void atomic_wait(const volatile std::atomic<T>* object,
+                 typename std::atomic<T>::value_type old );
+// 3)
+template< class T >
+void atomic_wait_explicit(const std::atomic<T>* object,
+                          typename std::atomic<T>::value_type old,
+                          std::memory_order order );
+// 4)
+template< class T >
+void atomic_wait_explicit(const volatile std::atomic<T>* object,
+                          typename std::atomic<T>::value_type old,
+                          std::memory_order order );
+```
+
+执行原子等待操作。其行为类似于重复执行以下步骤：
+
+1. 将 `object->load()`（对于重载 (1,2)）或 `object->load(order)`（对于重载 (3,4)）的值表示形式与 `old` 的值表示形式进行比较。
+   1. 如果它们**逐位相等**，则阻塞当前线程，直到 `*object` 被 `std::atomic::notify_one()` 或 `std::atomic::notify_all()` 通知，或者线程被**伪唤醒**（spuriously unblocked）。
+   2. 否则（即值不相等），立即返回。
+
+这些函数保证只有在**值确实发生变化时**才会返回，即使底层实现发生了伪唤醒。
+
+1,2) 等价于 `object->wait(old)`。
+3,4) 等价于 `object->wait(old, order)`。
+
+**重要限制**：如果 `order` 是 `std::memory_order::release` 或 `std::memory_order::acq_rel`，则行为是**未定义的**。
+
+以下是一个使用 `std::atomic_wait` 的简单示例：
+
+```cpp
+#include <iostream>
+#include <atomic>
+#include <thread>
+#include <vector>
+#include <chrono>
+
+std::atomic<int> data(0);
+const int target_value = 42;
+
+void consumer() {
+    int old_value = data.load();
+    
+    while (old_value != target_value) {
+        std::atomic_wait(&data, old_value);
+        old_value = data.load();
+    }
+    
+    std::cout << "Consumer: Data is now " << data.load() << std::endl;
+}
+
+void producer() {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    
+    data.store(target_value);
+    std::atomic_notify_one(&data);  // 通知一个等待的线程
+    std::cout << "Producer: Data updated and notified" << std::endl;
+}
+
+int main() {
+    std::thread consumer_thread(consumer);
+    std::thread producer_thread(producer);
+    
+    consumer_thread.join();
+    producer_thread.join();
+    
+    return 0;
+}
+
+// Producer: Data updated and notified
+// Consumer: Data is now 42
+```
+
+## [Semaphores](https://en.cppreference.com/w/cpp/thread/counting_semaphore.html)
+
+信号量是一种轻量级的同步原语，用于限制对共享资源的并发访问。在适用场景下，信号量比条件变量更高效。
+
+```cpp
+template< std::ptrdiff_t LeastMaxValue = /* implementation-defined */ >
+class counting_semaphore;
+
+using binary_semaphore = std::counting_semaphore<1>;
+```
+
+`std::counting_semaphore` 是 C++20 引入的轻量级同步原语，用于控制对共享资源的访问。与 `std::mutex` 不同，计数信号量允许多个并发访问者同时访问同一资源，最多允许 `LeastMaxValue` 个并发访问者。
+
+`std::binary_semaphore` 是 `std::counting_semaphore` 的特化，具体实现上，可能比 `std::counting_semaphore<1>` 更有效率
+
+`std::counting_semaphore` 计数信号量包含一个内部计数器，该计数器在构造函数中初始化：
+
+* 调用 `acquire()` 及相关方法会减少计数器
+* 调用 `release()` 会增加计数器
+* 当计数器为零时，`acquire()` 会阻塞直到计数器增加
+* `try_acquire()` 不会阻塞，即使计数器为零
+* `try_acquire_for()` 和 `try_acquire_until()` 会阻塞直到计数器增加或超时
+
+`std::counting_semaphore` 的特化具有以下限制：不可默认构造 (DefaultConstructible)、不可拷贝构造 (CopyConstructible)、不可移动构造 (MoveConstructible)、不可拷贝赋值 (CopyAssignable)、不可移动赋值 (MoveAssignable)
+
+这意味着信号量对象不能复制或移动，通常应作为全局变量或通过引用传递给线程函数。
+
+**注意**：`LeastMaxValue` 是最小最大值，而非实际最大值。因此 `max()` 可能返回比 `LeastMaxValue` 更大的数字
+
+与 `std::mutex` 不同，计数信号量不与执行线程绑定----获取信号量和释放信号量可以在不同的线程上进行。所有对计数信号量的操作都可以并发执行，且与特定执行线程无关，但析构操作不能并发执行（不过可以在不同线程上进行）。
+
+信号量也常用于信号/通知语义，而不是互斥，通过将信号量初始化为 0，从而阻塞尝试调用 `acquire()` 的接收者，直到通知者通过调用 `release(n)` 发出"信号"。在这方面，信号量可以被视为 `std::condition_variable` 的替代品，通常具有更好的性能。
 
 
 # C++20并发编程新特性：同步原语的革命性增强
