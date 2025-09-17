@@ -537,6 +537,159 @@ using binary_semaphore = std::counting_semaphore<1>;
 
 信号量也常用于信号/通知语义，而不是互斥，通过将信号量初始化为 0，从而阻塞尝试调用 `acquire()` 的接收者，直到通知者通过调用 `release(n)` 发出"信号"。在这方面，信号量可以被视为 `std::condition_variable` 的替代品，通常具有更好的性能。
 
+下面是几个使用示例：
+
+可以使用 `binary_semaphore` 作为 “信号触发器”在线程之间进行通信。[godbolt](https://godbolt.org/z/EvxeeG9oM)
+
+```cpp
+#include <iostream>
+#include <semaphore>  // C++20 头文件
+#include <thread>
+#include <chrono>
+
+// 二元信号量初始化：count=0（初始为“未触发”状态，acquire() 会阻塞）
+std::binary_semaphore sem_main_to_thread{0};
+std::binary_semaphore sem_thread_to_main{0};
+
+void worker_thread() {
+    std::cout << "[Worker] Waiting for main thread's signal...\n";
+    // 等待主线程信号：计数器从 0→1 才会继续（否则阻塞）
+    sem_main_to_thread.acquire();
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::cout << "[Worker] Task completed! Sending signal to main...\n";
+
+    // 向主线程发送完成信号：计数器从 0→1，唤醒主线程的 acquire()
+    sem_thread_to_main.release();
+}
+
+int main() {
+    // 创建工作线程（此时工作线程卡在 sem_main_to_thread.acquire()）
+    std::thread worker(worker_thread);
+
+    std::cout << "[Main] Preparing data...\n";
+
+    std::cout << "[Main] Sending start signal to worker...\n";
+    sem_main_to_thread.release();
+
+    sem_thread_to_main.acquire();
+    std::cout << "[Main] Worker task done! Joining thread...\n";
+
+    worker.join();
+    return 0;
+}
+
+// [Main] Preparing data...
+// [Worker] Waiting for main thread's signal...
+// [Main] Sending start signal to worker...
+// [Worker] Task completed! Sending signal to main...
+// [Main] Worker task done! Joining thread...
+```
+
+可以使用 `binary_semaphore` 控制对共享变量的访问，防止 “数据竞争”。[godbolt](https://godbolt.org/z/Kr9cKM4j9)
+
+```cpp
+#include <semaphore>
+#include <thread>
+#include <vector>
+
+int shared_counter = 0;
+std::binary_semaphore sem_mutex{1};
+
+void increment_counter(int id, int times) {
+    for (int i = 0; i < times; ++i) {
+        sem_mutex.acquire();
+        
+        shared_counter++;
+        std::cout << "[Thread " << id << "] Incremented: shared_counter = " << shared_counter << "\n";
+        
+        sem_mutex.release();
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+int main() {
+    std::thread t1(increment_counter, 1, 5);
+    std::thread t2(increment_counter, 2, 5);
+
+    t1.join();
+    t2.join();
+
+    std::cout << "[Main] Final shared_counter = " << shared_counter << "\n";  // 预期为 10
+    return 0;
+}
+
+// [Thread 1] Incremented: shared_counter = 1
+// [Thread 2] Incremented: shared_counter = 2
+// [Thread 1] Incremented: shared_counter = 3
+// [Thread 2] Incremented: shared_counter = 4
+// [Thread 1] Incremented: shared_counter = 5
+// [Thread 2] Incremented: shared_counter = 6
+// [Thread 1] Incremented: shared_counter = 7
+// [Thread 2] Incremented: shared_counter = 8
+// [Thread 1] Incremented: shared_counter = 9
+// [Thread 2] Incremented: shared_counter = 10
+// [Main] Final shared_counter = 10
+```
+
+更一般地，可以使用 counting_semaphore 来控制对共享资源的访问并发度。
+
+```cpp
+#include <iostream>
+#include <semaphore>
+#include <thread>
+#include <vector>
+#include <chrono>
+
+std::counting_semaphore<2> sem_task_limit{2};
+
+void process_task(int task_id) {
+    sem_task_limit.acquire();
+    
+    std::cout << "[" << task_id << "] Started (concurrency: " << 2 - sem_task_limit.max() + sem_task_limit.max() << ")\n";
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    
+    std::cout << "[" << task_id << "] Completed\n";
+    sem_task_limit.release();
+}
+
+int main() {
+    std::vector<std::thread> threads;
+    const int total_tasks = 5;
+
+    for (int i = 0; i < total_tasks; ++i) {
+        threads.emplace_back(process_task, i + 1);
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    std::cout << "[Main] All tasks completed!\n";
+    return 0;
+}
+
+// [1] Started (concurrency: 2)
+// [2] Started (concurrency: 2)
+// [1] Completed
+// [2] Completed
+// [4] Started (concurrency: 2)
+// [5] Started (concurrency: 2)
+// [5] Completed
+// [3] Started (concurrency: 2)
+// [4] Completed
+// [3] Completed
+// [Main] All tasks completed!
+```
+
+## Latch and Barrier
+
+### Latch
+
+std::latch 是一个向下计数的计数器（类型为 std::ptrdiff_t），用于线程同步。计数器的值在创建时初始化，线程可阻塞在 latch 上，直到计数器递减至 0。计数器无法重置或增加，因此 latch 是一种 “单次使用的屏障”（single-use barrier）。
+
+
 
 # C++20并发编程新特性：同步原语的革命性增强
 
