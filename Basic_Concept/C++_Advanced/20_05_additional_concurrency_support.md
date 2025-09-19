@@ -2,6 +2,17 @@
 
 > [C++对并发的支持](https://en.cppreference.com/w/cpp/atomic.html)
 
+- [Additional Concurrency Support in C++20](#additional-concurrency-support-in-c20)
+  - [`std::jthread`](#stdjthread)
+  - [协作退出](#协作退出)
+  - [std::atomic\_ref](#stdatomic_ref)
+  - [std::atomic\_wait](#stdatomic_wait)
+  - [Semaphores](#semaphores)
+  - [Latch and Barrier](#latch-and-barrier)
+    - [Latch](#latch)
+    - [Barrier](#barrier)
+  - [新增的几个同步原语的对比](#新增的几个同步原语的对比)
+
 根据 cppreference 的描述看，C++20新增的支持并发编程的语言工具包括如下：
 
 * [jthread(C++20)](https://en.cppreference.com/w/cpp/thread/jthread.html) std::thread with support for auto-joining and cancellation
@@ -687,369 +698,271 @@ int main() {
 
 ### Latch
 
-std::latch 是一个向下计数的计数器（类型为 std::ptrdiff_t），用于线程同步。计数器的值在创建时初始化，线程可阻塞在 latch 上，直到计数器递减至 0。计数器无法重置或增加，因此 latch 是一种 “单次使用的屏障”（single-use barrier）。
+`std::latch` 是一个向下计数的计数器（类型为 `std::ptrdiff_t`），用于线程同步。计数器的值在创建时初始化，线程可阻塞在 `latch` 上，直到计数器递减至 0。计数器无法重置或增加，因此 `latch` 是一种 “单次使用的屏障”（single-use barrier）。综合来看，`latch` 具有以下特点
 
+* 单次使用：计数器到 0 后，再调用 `count_down()` 或 `wait()` 无意义（计数不会再变，`wait()` 直接返回）；
+* 并发安全：除析构函数外，所有成员函数支持并发调用（无数据竞争）；
+* 轻量级：相比 `std::condition_variable`，`std::latch` 无需关联 `std::mutex`，实现更高效，开销更低；
+* 线程无关：计数器的递减`count_down()` 和等待 `wait()` 可以在不同线程中执行（比如线程 A 递减，线程 B 等待）。
 
+`std::latch`的成员函数
 
-# C++20并发编程新特性：同步原语的革命性增强
+| 成员函数          | 功能描述                                                                 | 关键说明                                                                 | 适用场景                     |
+|-------------------|--------------------------------------------------------------------------|--------------------------------------------------------------------------|------------------------------|
+| **构造函数**      | `explicit latch(ptrdiff_t count)`                                        | 初始化计数器为 `count`（`count` 必须 ≥0，否则抛出 `std::invalid_argument`）；无默认构造，neither copyable nor movable | 创建 `latch` 实例时设定目标计数 |
+| **析构函数**      | `~latch()`                                                               | 销毁 `latch`；**注意：不能在有线程等待时析构**（会导致未定义行为）。       | 生命周期结束时自动调用       |
+| **count_down**    | `void count_down(ptrdiff_t update = 1)`                                  | 计数器递减 `update`（默认减 1）；无阻塞，调用后直接返回。                 | 任务完成后“通知”计数器减少   |
+| **try_wait**      | `bool try_wait() const noexcept`                                         | 检查计数器是否为 0；**不阻塞**，返回 `true` 表示已到 0，`false` 表示未到。 | 非阻塞式检查同步状态         |
+| **wait**          | `void wait() const`                                                      | 阻塞当前线程，直到计数器变为 0；若已为 0，直接返回。                     | 等待所有任务完成             |
+| **arrive_and_wait**| `void arrive_and_wait(ptrdiff_t update = 1)`                            | 先执行 `count_down(update)`，再执行 `wait()`；相当于“完成任务后直接等待”。 | 当前线程完成任务后，等待其他线程 |
+| **max()**（静态） | `static constexpr ptrdiff_t max() noexcept`                              | 返回实现支持的最大计数器值（不同编译器可能不同，通常很大）。               | 确认计数器上限               |
 
-C++20标准为并发编程带来了一系列重要更新，特别是新增的同步原语填补了之前标准在多线程协作方面的空白。这些标准化组件不仅简化了并发代码的编写，还提高了程序的性能和可移植性。本文将深入解析C++20中引入的核心同步机制，包括`std::latch`、`std::barrier`和`std::semaphore`，并通过实用示例展示它们如何解决实际开发中的并发挑战。
-
-## 并发编程的演进与C++20的定位
-
-在C++11之前，并发编程完全依赖平台特定的API（如POSIX线程或Windows线程），代码可移植性极差。C++11引入了`std::thread`、`std::mutex`等基础组件，首次为C++提供了标准化的并发支持。C++17在此基础上增加了`std::shared_mutex`等工具，但在复杂同步场景下仍显不足。
-
-C++20的同步原语借鉴了Boost库和工业实践中的成熟方案，针对以下痛点提供了解决方案：
-
-- 简化多线程初始化/销毁阶段的同步逻辑
-- 提供可重用的线程协作机制
-- 标准化信号量实现，避免重复造轮子
-- 减少手动使用条件变量带来的错误风险
-
-这些新特性遵循"零成本抽象"原则，在提供便捷性的同时不引入额外性能开销。
-
-## std::latch：一次性同步点
-
-`std::latch`是一个一次性使用的同步机制，允许一个或多个线程等待其他线程完成一系列操作。它的核心思想是：线程通过减少计数器表示完成某项工作，当计数器归零时，所有等待的线程被唤醒。
-
-### 核心特性与接口
+如果要判断编译器是否支持 `std::latch`，可检查特性测试宏 `__cpp_lib_latch`，其值为 `201907L` 表示支持（C++20 标准）：
 
 ```cpp
-#include <latch>
-
-// 构造函数：指定初始计数
-std::latch lat(N);
-
-// 减少计数，不等待
-lat.count_down(n);       // 减少n（默认减少1）
-bool lat.try_wait();     // 若计数为0返回true，否则false
-
-// 减少计数并等待（原子操作）
-lat.arrive_and_wait(n);  // 减少n并等待计数为0（默认n=1）
-
-// 等待计数为0
-lat.wait();              // 阻塞直到计数为0
+#if defined(__cpp_lib_latch) && __cpp_lib_latch >= 201907L
+    // 支持 std::latch
+#else
+    // 不支持，需降级处理（如用 condition_variable）
+#endif
 ```
 
-`std::latch`的关键特性是**不可重置性**，一旦计数器归零，后续操作不会改变其状态，这使它非常适合一次性同步场景。
-
-### 实用示例：并行任务初始化
-
-在多线程应用中，主线程常常需要等待所有工作线程完成初始化后再继续执行：
+下面给出一个使用 `std::latch` 实现分阶段任务同步，涉及多轮等待的例子。[godbolt](https://godbolt.org/z/5Kben1EW5)
 
 ```cpp
+#include <iostream>
 #include <latch>
 #include <thread>
 #include <vector>
-#include <iostream>
 
-void worker_init(std::latch& init_latch, int id) {
-    // 模拟初始化工作
-    std::cout << "Worker " << id << " initializing...\n";
-    std::this_thread::sleep_for(std::chrono::milliseconds(100 * id));
-    
-    // 初始化完成，减少计数
-    init_latch.count_down();
-    
-    // 执行其他工作（此时主线程可能仍在等待）
-    std::cout << "Worker " << id << " starting work...\n";
+void read_data(int thread_id, std::latch& read_done) {
+    std::cout << "read_data " << thread_id << " start\n";
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::cout << "read_data " << thread_id << " finish\n";
+    read_done.count_down();
+}
+
+void calc_data(int thread_id, std::latch& read_done, std::latch& calc_done) {
+    std::cout << "calc_data " << thread_id << " waiting...\n";
+    read_done.wait();
+    std::cout << "calc_data " << thread_id << " start\n";
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::cout << "calc_data " << thread_id << " finish\n";
+    calc_done.count_down();
+}
+
+void output_result(std::latch& calc_done) {
+    std::cout << "output_result waiting...\n";
+    calc_done.wait();
+    std::cout << "output_result finish\n";
 }
 
 int main() {
-    const int num_workers = 3;
-    std::latch init_latch(num_workers);  // 计数为3
-    
-    std::vector<std::thread> workers;
-    for (int i = 0; i < num_workers; ++i) {
-        workers.emplace_back(worker_init, std::ref(init_latch), i);
+    std::latch read_done(2);
+    std::latch calc_done(3);
+
+    std::vector<std::thread> read_threads;
+    for (int i = 1; i <= 2; ++i) {
+        read_threads.emplace_back(read_data, i, std::ref(read_done));
     }
-    
-    // 等待所有工作线程完成初始化
-    std::cout << "Main thread waiting for initialization...\n";
-    init_latch.wait();
-    std::cout << "All workers initialized. Main thread proceeding.\n";
-    
-    // 等待工作线程完成
-    for (auto& t : workers) {
-        t.join();
+
+    std::vector<std::thread> calc_threads;
+    for (int i = 1; i <= 3; ++i) {
+        calc_threads.emplace_back(calc_data, i, std::ref(read_done), std::ref(calc_done));
     }
-    
+
+    std::thread output_thread(output_result, std::ref(calc_done));
+
+    for (auto& t : read_threads) t.join();
+    for (auto& t : calc_threads) t.join();
+    output_thread.join();
+
     return 0;
 }
+
+// read_data 2 start
+// calc_data 1 waiting...
+// calc_data 2 waiting...
+// calc_data 3 waiting...
+// output_result waiting...
+// read_data 1 start
+// read_data 2 finish
+// read_data 1 finish
+// calc_data 2 start
+// calc_data 3 start
+// calc_data 1 start
+// calc_data 1 finish
+// calc_data 3 finish
+// calc_data 2 finish
+// output_result finish
 ```
 
-输出将显示主线程在所有工作线程初始化完成后才继续执行，完美解决了多线程启动同步问题。
+### Barrier
 
-### 适用场景
+`std::barrier` 是 C++20 标准库中引入的一种线程协调机制，用于阻塞一组已知数量的线程，直到这组线程全部抵达屏障点。与 `std::latch` 不同，屏障是可重复使用的：当一组到达的线程被解除阻塞后，屏障可以被重新使用。此外，与 `std::latch` 不同的是，屏障在解除线程阻塞之前，会执行一个可能为空的可调用函数。
 
-- 应用启动时等待所有组件初始化
-- 并行算法中等待所有分块计算完成
-- 测试框架中等待所有测试用例准备就绪
-- 资源释放阶段等待所有使用者退出
+一个屏障对象的生命周期由一个或多个阶段组成。每个阶段定义了一个阶段同步点，线程在此处阻塞。线程可以调用 `arrive` 方法抵达屏障，但延迟在阶段同步点上等待。这些线程稍后可以通过调用 `wait` 方法在阶段同步点上阻塞。
 
-## std::barrier：可重用的同步屏障
+`std::barrier` 阶段包括以下步骤：
 
-`std::barrier`是一种可重用的同步机制，允许固定数量的线程在每次迭代中等待彼此到达某个点。与`latch`的一次性特性不同，`barrier`在所有线程到达后可以重置，支持循环中的多次同步。
+1. 每次调用 arrive 或 arrive_and_drop 方法时，预期计数都会减少。
+2. 当预期计数达到零时，将执行阶段完成步骤，即调用完成回调函数，并解除所有在阶段同步点上阻塞的线程的阻塞。完成步骤的结束强烈发生于所有因完成步骤而解除阻塞的调用返回之前。在预期计数达到零后，恰好会有一个线程在调用 arrive、arrive_and_drop 或 wait 方法期间执行完成步骤。不过，如果没有任何线程调用 wait，则是否执行完成步骤由具体实现定义。
+3. 当完成步骤结束后，预期计数将重置为构造函数中指定的值减去自上次重置以来 arrive_and_drop 的调用次数，下一个屏障阶段随即开始。
 
-### 核心特性与接口
+`std::barrier` 的成员函数（除析构函数外）的并发调用不会引入数据竞争。
+
+| 特性                | std::barrier                          | std::latch                          |
+|---------------------|---------------------------------------|-------------------------------------|
+| **可重用性**        | ✅ 支持（自动重置计数器，多阶段同步） | ❌ 单次使用（计数器到 0 后不可变）   |
+| **完成函数**        | ✅ 支持（阶段完成前执行，可选）       | ❌ 无                                |
+| **计数调整**        | ✅ 支持（arrive_and_drop 减少后续阶段计数） | ❌ 仅递减，不可调整后续计数         |
+| **核心场景**        | 循环任务、多阶段流程（如“工作-清理”循环） | 单次等待（如初始化、单次任务汇总） |
+| **线程动态退出**    | ✅ 支持（arrive_and_drop 允许线程提前退出） | ❌ 不支持（一旦设定计数，无法减少） |
+
+```cpp
+constexpr explicit barrier( std::ptrdiff_t expected,
+                            CompletionFunction f = CompletionFunction());
+
+barrier( const barrier& ) = delete;
+```
+
+`std::barrier` 的模板参数 `CompletionFunction` 用于指定“阶段完成时执行的函数”，需满足以下要求：
+
+* 可移动构造（MoveConstructible）、可析构（Destructible）；
+* 无参数调用，且调用不抛出异常（`std::is_nothrow_invocable_v<CompletionFunction&> == true`）；
+* **默认值**：若不指定，默认是一个“空操作函数”（调用后无任何效果）。
+
+```cpp
+// 完成函数：阶段完成时打印提示（noexcept 确保不抛异常）
+auto on_phase_complete = []() noexcept {
+    std::cout << "=== 当前阶段所有线程已到达，进入下一阶段 ===\n";
+};
+// 初始化 barrier：3 个线程，完成函数为 on_phase_complete
+std::barrier sync_barrier(3, on_phase_complete);
+```
+
+`arrival_token`(an unspecified object type meeting requirements of MoveConstructible, MoveAssignable and Destructible)。作用：标记线程“已到达屏障”但尚未等待的状态（通过 `arrive()` 获得）；线程调用 `arrive()` 获得 `arrival_token` 后，可稍后通过 `wait(arrival_token)` 等待阶段完成（适合“先标记到达，再处理其他逻辑，最后等待”的场景）。
+
+```cpp
+auto token = sync_barrier.arrive(); // 标记到达，计数器减 1
+do_something_else();                // 处理其他逻辑（不阻塞）
+sync_barrier.wait(token);           // 等待阶段完成（此时若其他线程已到，直接通过）
+```
+
+`std::barrier`的成员函数
+
+| 成员函数          | 功能描述                                                                 | 关键细节                                                                 | 适用场景                     |
+|-------------------|--------------------------------------------------------------------------|--------------------------------------------------------------------------|------------------------------|
+| **构造函数**      | `explicit barrier(ptrdiff_t expected, CompletionFunction f = {});`       | 初始化“预期线程数”为 `expected`（≥0，否则抛异常），完成函数为 `f`；无默认构造。 | 创建 barrier 实例             |
+| **析构函数**      | `~barrier();`                                                            | 销毁 barrier；**严禁在有线程等待或执行完成函数时析构**（未定义行为）。       | 生命周期结束时自动调用       |
+| **arrive()**      | `arrival_token arrive();`                                                | 标记“线程已到达”，计数器减 1；返回 `arrival_token`，**不阻塞**。             | 线程先到达，后续再等待       |
+| **wait()**        | `void wait(arrival_token&& token) const;`                                | 阻塞当前线程，直到当前阶段完成；需传入 `arrive()` 返回的 `token`。          | 配合 `arrive()` 延迟等待     |
+| **arrive_and_wait()** | `void arrive_and_wait();`                                              | 等价于 `wait(arrive())`：先标记到达（计数器减 1），再阻塞等待阶段完成。       | 线程到达后立即等待（最常用） |
+| **arrive_and_drop()** | `void arrive_and_drop();`                                              | 1. 标记到达（当前阶段计数器减 1）；<br>2. 减少“后续阶段的预期线程数”（初始值减 1）；<br>3. 不阻塞。 | 线程提前退出，后续阶段不再等待它 |
+| **max()**（静态） | `static constexpr ptrdiff_t max() noexcept;`                              | 返回实现支持的最大“预期线程数”（通常很大，如 2^31-1）。                     | 确认计数器上限               |
+
+下面是一个使用示例：4 个线程执行 3 轮任务，其中线程 4 在第 2 轮结束后提前退出（后续阶段不再参与）。[godbolt](https://godbolt.org/z/zGWjxTW3K)
 
 ```cpp
 #include <barrier>
-
-// 构造函数：指定参与线程数和完成函数（可选）
-std::barrier barrier(N, completion_func);
-
-// 到达屏障并等待
-barrier.arrive_and_wait();  // 到达并等待所有线程
-
-// 到达屏障但不等待（减少等待计数）
-barrier.arrive_and_drop();  // 到达并退出屏障参与
-```
-
-`std::barrier`的独特之处在于**完成函数**（completion function），当所有线程到达屏障时，会自动调用该函数（由最后一个到达的线程执行），然后所有线程被唤醒。
-
-### 实用示例：迭代式并行计算
-
-在分治算法或迭代优化问题中，线程需要在每轮计算后同步结果：
-
-```cpp
-#include <barrier>
+#include <iostream>
 #include <thread>
 #include <vector>
-#include <iostream>
-#include <numeric>
+#include <chrono>
 
-const int NUM_THREADS = 4;
-const int NUM_ITERATIONS = 3;
-std::vector<double> partial_results(NUM_THREADS, 0.0);
-
-// 屏障完成函数：汇总部分结果
-void aggregate_results() {
-    static int iteration = 0;
-    double total = std::accumulate(partial_results.begin(), 
-                                  partial_results.end(), 0.0);
-    std::cout << "Iteration " << iteration++ << " complete. Total: " << total << "\n";
-}
-
-void worker_task(std::barrier<>& barrier, int thread_id) {
-    for (int i = 0; i < NUM_ITERATIONS; ++i) {
-        // 模拟本轮计算
-        partial_results[thread_id] = (thread_id + 1) * (i + 1);
-        std::cout << "Thread " << thread_id << " completed iteration " << i << "\n";
-        
-        // 等待所有线程完成本轮计算
-        barrier.arrive_and_wait();
-    }
-}
+auto on_phase_complete = [](int& current_thread_count) noexcept {
+    static int phase = 1;
+    std::cout << "\n=== " << phase << " round complete(thread count: " 
+              << current_thread_count << ") ===\n";
+    phase++;
+};
 
 int main() {
-    // 创建屏障：4个线程参与，指定完成函数
-    std::barrier barrier(NUM_THREADS, aggregate_results);
-    
+    int initial_thread_count = 4;
+    auto completion = [&]() noexcept {
+        static int phase = 1;
+        std::cout << "\n=== " << phase << " round complete(thread count: " 
+                  << initial_thread_count << ") ===\n";
+        phase++;
+    };
+
+    std::barrier sync_barrier(initial_thread_count, completion);
+
+    auto worker_task = [&](int thread_id) {
+        for (int phase = 1; phase <= 3; ++phase) {
+            if (thread_id == 4 && phase == 3) {
+                std::cout << thread_id << ": exit early.\n";
+                sync_barrier.arrive_and_drop();
+                initial_thread_count--;
+                break; 
+            }
+
+            std::cout <<  thread_id << ": " << phase << " round......\n";
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+
+            sync_barrier.arrive_and_wait();
+
+            std::cout <<  thread_id << ": " << phase << " round done\n";
+        }
+    };
+
     std::vector<std::thread> threads;
-    for (int i = 0; i < NUM_THREADS; ++i) {
-        threads.emplace_back(worker_task, std::ref(barrier), i);
+    for (int i = 1; i <= initial_thread_count; ++i) {
+        threads.emplace_back(worker_task, i);
     }
-    
+
     for (auto& t : threads) {
         t.join();
     }
-    
+
+    std::cout << "\nall down\n";
     return 0;
 }
+
+// 1: 1 round......
+// 3: 1 round......
+// 4: 1 round......
+// 2: 1 round......
+
+// === 1 round complete(thread count: 4) ===
+// 1: 1 round done
+// 1: 2 round......
+// 4: 1 round done
+// 4: 2 round......
+// 2: 1 round done
+// 2: 2 round......
+// 3: 1 round done
+// 3: 2 round......
+
+// === 2 round complete(thread count: 4) ===
+// 1: 2 round done
+// 1: 3 round......
+// 2: 2 round done
+// 2: 3 round......
+// 4: 2 round done
+// 4: exit early.
+// 3: 2 round done
+// 3: 3 round......
+
+// === 3 round complete(thread count: 3) ===
+// 3: 3 round done
+// 2: 3 round done
+// 1: 3 round done
+
+// all down
 ```
 
-这个示例展示了`barrier`在迭代计算中的优势：每轮迭代后自动汇总结果，且屏障可重复使用，避免了手动重置同步状态的麻烦。
+对 `barrier` 的使用有如下的注意点：
 
-### 适用场景
+1. 不应在有线程等待 `barrier` 或执行完成函数时析构 `barrier`，否则会触发未定义行为（程序崩溃、死锁等）。 正确做法是，确保所有线程已退出或不再使用 `barrier` 后，再让 `barrier` 生命周期结束。
+2. 标准要求 `CompletionFunction` 调用时不抛出异常（`noexcept`），若抛出，程序会调用 `std::terminate()` 终止。可以在完成函数中显式添加 `noexcept`，并避免可能抛异常的操作（如 `new` 不接 `nothrow`、未捕获的异常）。
+3. 调用 `arrive_and_drop()` 后，后续阶段的“预期线程数”会永久减少（初始值减去调用次数），无法恢复。若后续阶段仍需该线程参与，不要调用此函数。
+4. `arrive()` 返回的 `arrival_token` 是“Move-only”类型，不能拷贝（如 `auto token2 = token1` 错误），只能移动（如 `auto token2 = std::move(token1)`）。
 
-- 迭代式并行算法（如牛顿法、分形生成）
-- 流水线式处理（各阶段同步后进入下一阶段）
-- 仿真系统（每帧同步所有实体状态）
-- 定期数据汇总与分析
+## 新增的几个同步原语的对比
 
-## std::counting_semaphore：资源访问控制
-
-C++20引入的`std::counting_semaphore`（计数信号量）是一种经典的同步机制，用于控制对有限资源的并发访问。它维护一个非负整数计数器，通过`acquire()`和`release()`操作管理资源的分配与释放。
-
-### 核心特性与接口
-
-```cpp
-#include <semaphore>
-
-// 模板参数为最大计数（编译期常量）
-std::counting_semaphore<MAX_COUNT> sem(INIT_COUNT);
-
-// 获取资源（计数器减1，若为0则阻塞）
-sem.acquire();        // 可能阻塞
-bool sem.try_acquire();  // 非阻塞，失败返回false
-
-// 超时版本
-bool sem.try_acquire_for(Duration d);
-bool sem.try_acquire_until(TimePoint t);
-
-// 释放资源（计数器加1）
-sem.release(n);       // 增加n（默认1）
-```
-
-C++20还提供了`std::binary_semaphore`，它是`std::counting_semaphore<1>`的别名，适用于互斥访问单个资源的场景。
-
-### 实用示例：连接池实现
-
-数据库连接池是信号量的典型应用场景，限制同时打开的连接数量：
-
-```cpp
-#include <semaphore>
-#include <vector>
-#include <queue>
-#include <mutex>
-#include <thread>
-#include <iostream>
-#include <chrono>
-
-class ConnectionPool {
-private:
-    static const int MAX_CONNECTIONS = 5;
-    std::queue<int> connections_;  // 模拟连接池
-    std::mutex mtx_;
-    // 信号量控制可用连接数
-    std::counting_semaphore<MAX_CONNECTIONS> sem_{MAX_CONNECTIONS};
-
-public:
-    ConnectionPool() {
-        // 初始化连接池
-        for (int i = 1; i <= MAX_CONNECTIONS; ++i) {
-            connections_.push(i);
-        }
-    }
-
-    // 获取连接
-    int acquire_connection() {
-        sem_.acquire();  // 等待可用连接
-        std::lock_guard<std::mutex> lock(mtx_);
-        int conn = connections_.front();
-        connections_.pop();
-        std::cout << "Thread " << std::this_thread::get_id() 
-                  << " acquired connection " << conn << "\n";
-        return conn;
-    }
-
-    // 释放连接
-    void release_connection(int conn) {
-        std::lock_guard<std::mutex> lock(mtx_);
-        connections_.push(conn);
-        std::cout << "Thread " << std::this_thread::get_id() 
-                  << " released connection " << conn << "\n";
-        sem_.release();  // 增加可用连接计数
-    }
-};
-
-// 模拟数据库操作
-void perform_database_operation(ConnectionPool& pool, int task_id) {
-    int conn = pool.acquire_connection();
-    // 模拟数据库操作
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    pool.release_connection(conn);
-}
-
-int main() {
-    ConnectionPool pool;
-    std::vector<std::thread> tasks;
-
-    // 启动10个任务，但最多同时使用5个连接
-    for (int i = 0; i < 10; ++i) {
-        tasks.emplace_back(perform_database_operation, std::ref(pool), i);
-    }
-
-    for (auto& t : tasks) {
-        t.join();
-    }
-
-    return 0;
-}
-```
-
-这个示例中，信号量确保了同时使用的数据库连接数不会超过最大值，有效防止了资源耗尽。
-
-### 适用场景
-
-- 线程池中的任务调度
-- 有限资源的并发访问控制（如数据库连接、文件句柄）
-- 生产者-消费者模型中的缓冲区控制
-- 限制并发请求数量，防止系统过载
-
-## C++20其他重要并发增强
-
-除了上述同步原语，C++20还引入了其他提升并发编程体验的特性：
-
-### std::jthread：自动管理的线程
-
-`std::jthread`是`std::thread`的改进版，具有自动join的特性，避免了因忘记join而导致的程序终止风险：
-
-```cpp
-#include <thread>
-#include <iostream>
-
-int main() {
-    // jthread析构时会自动join
-    std::jthread t([]{
-        std::cout << "Thread working...\n";
-    });
-    // 无需手动调用t.join()
-    return 0;
-}
-```
-
-`std::jthread`还支持通过`std::stop_token`进行协作式中断，提供了优雅的线程取消机制。
-
-### 协程与并发
-
-C++20引入的协程（coroutines）为异步编程提供了语言级支持，配合`std::future`和同步原语，可以编写更简洁的异步代码：
-
-```cpp
-#include <coroutine>
-#include <future>
-#include <iostream>
-
-std::future<int> async_task() {
-    co_return 42;  // 协程暂停并返回结果
-}
-
-int main() {
-    auto fut = async_task();
-    std::cout << "Result: " << fut.get() << "\n";
-    return 0;
-}
-```
-
-协程特别适合I/O密集型应用，避免了传统回调地狱问题。
-
-## 最佳实践与性能考量
-
-1. **选择合适的同步原语**：
-   - 一次性同步用`latch`
-   - 循环同步用`barrier`
-   - 资源控制用`semaphore`
-
-2. **避免过度同步**：
-   不必要的同步会导致性能瓶颈，尽量减小临界区范围，利用原子操作替代锁机制。
-
-3. **注意线程数量**：
-   线程数超过CPU核心数会导致上下文切换开销增加，通常建议线程数等于或略大于核心数。
-
-4. **测试并发代码**：
-   使用线程 sanitizer（如`-fsanitize=thread`）检测数据竞争，通过压力测试暴露潜在的同步问题。
-
-5. **利用编译器优化**：
-   现代编译器（如GCC 10+、Clang 11+）对C++20并发特性有良好支持，启用优化（`-O2`）可显著提升性能。
-
-## 总结
-
-C++20引入的同步原语标志着C++并发编程进入了新的阶段。`std::latch`、`std::barrier`和`std::counting_semaphore`提供了标准化的线程协作方案，简化了代码并提高了可移植性。这些特性与`std::jthread`、协程等新功能一起，使C++在并发编程领域更加成熟和易用。
-
-对于开发者而言，掌握这些新特性不仅能提高代码质量和性能，还能减少与平台相关的兼容性问题。随着C++标准的不断演进，我们有理由相信C++在高性能并发编程领域将继续保持领先地位。
-
-要深入学习这些特性，建议参考：
-- [cppreference.com - C++20 同步原语](https://en.cppreference.com/w/cpp/thread)
-- 《C++ High Performance》第11章及附录
-- C++标准委员会关于并发的提案（如P0514、P0666）
+| 同步原语          | 核心用途                  | 计数操作                | 可重用性 | 典型场景                          |
+|-------------------|---------------------------|-------------------------|----------|-----------------------------------|
+| **std::latch**    | 等待一组事件完成          | 仅递减（不可增加/重置） | ❌ 单次   | 主线程等待子线程初始化、分阶段任务 |
+| **std::barrier**  | 多线程同步到同一执行点    | 递减到 0 后自动重置     | ✅ 可重用 | 循环执行任务（如每轮计算后同步）  |
+| **std::counting_semaphore** | 控制共享资源并发访问数    | 可递增（release）/递减（acquire） | ✅ 可重用 | 限制线程池并发数、资源池管理      |
