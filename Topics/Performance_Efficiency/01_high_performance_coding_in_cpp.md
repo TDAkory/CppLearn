@@ -1733,4 +1733,35 @@ int main() {
 
 #### C++20中的同步原语
 
-详见 [C++20 Additional synchronization primitives]()
+详见 [C++20 Additional synchronization primitives](../../Basic_Concept/C++_Advanced/20_05_additional_concurrency_support.md)
+
+#### C++中的原子支持
+
+对于所有标量数据类型，都有命名为std::atomic_int的 typedef。这与std::atomic<int>相同。
+
+只要自定义类型是平凡可复制的，就可以将自定义类型包装在std::atomic模板中。基本上，这意味着类的对象完全由其数据成员的位描述。这样，对象可以通过例如std::memcpy()仅复制原始字节来复制。
+
+原子变量可能会或可能不会使用锁来保护数据；这取决于变量的类型和平台。可以进行检查
+
+```cpp
+auto variable = std::atomic<int>{1};
+assert(variable.is_lock_free());          // Runtime assert 
+
+static_assert(std::atomic<int>::is_always_lock_free);   // since c++17, compile time check
+```
+
+在现代平台上，任何`std::atomic<T>`，其中T适合本机字大小，通常都是始终无锁的。在现代 x64 芯片上，甚至可以获得双倍的数量。例如，在现代英特尔 CPU 上编译的 libc++上，`std::atomic<std::complex<double>>`始终是无锁的。
+
+#### 内存模型和无锁编程
+
+话题较大，文档简单描述，需要参考其他材料
+
+### 性能指南
+
+* 避免竞争
+* 避免阻塞操作
+* 控制线程数：一个好方法是使用可以根据当前硬件大小调整大小的线程池
+* 线程优先级：与线程优先级相关的一种可能会影响性能并且应该避免的现象称为优先级反转。当一个具有高优先级的线程正在等待获取当前由低优先级线程持有的锁时，就会发生这种情况。这种依赖关系会影响高优先级线程，因为它被阻塞，直到下一次低优先级线程被调度以释放锁。
+* 线程亲和性：如果可能的话，一些线程应该在特定的核心上执行，以最小化缓存未命中
+
+### 伪共享
