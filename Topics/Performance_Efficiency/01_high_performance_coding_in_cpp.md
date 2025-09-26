@@ -1765,3 +1765,270 @@ static_assert(std::atomic<int>::is_always_lock_free);   // since c++17, compile 
 * 线程亲和性：如果可能的话，一些线程应该在特定的核心上执行，以最小化缓存未命中
 
 ### 伪共享
+
+[Thing_about_false_sharing](../../Basic_Concept/Things_About/Things_about_false_sharing.md)
+
+## 协程和惰性生成器（Coroutine & Lzay Generator）
+
+### Abstraction
+
+Subroutines and coroutines
+
+> Coroutines are very similar to subroutines. In C++, we don't have anything explicitly called subroutines; instead, we write functions (free functions or member functions, for example) to create subroutines.
+
+**To summarize, coroutines are subroutines that also can be suspended and resumed.**
+
+* `Program counter (PC)`: The register that stores the memory address of the currently executing instruction. This value is automatically incremented whenever an instruction is executed. Sometimes it is also called an instruction pointer
+* `Stack pointer (SP)`: It stores the address of the top of the currently used call stack. Allocating and deallocating stack memory is a matter of changing the value stored in this single register.
+
+调用惯例：The exact details about how function calls are carried out are specified by something called calling conventions. They provide a protocol for the caller/callee to agree
+on who is responsible for which parts. Calling conventions differ among CPU architectures and compilers and are one of the major parts that constitutes an application binary interface (ABI).
+
+当调用函数时，该函数的调用帧（或激活帧）被创建。调用帧包含：
+
+* 传递给函数的参数。
+* 函数的局部变量。
+* 打算使用的寄存器的快照，因此需要在返回之前恢复。
+* 返回地址，它链接回调用者从中调用函数的内存位置。
+* 可选的帧指针，指向调用者的调用帧顶部。在检查堆栈时，帧指针对调试器很有用。我们在本书中不会进一步讨论帧指针。
+
+当子程序返回给调用者时，它使用返回地址来知道要跳转到哪里，恢复它已经改变的寄存器，并弹出（释放）整个调用帧。
+
+### 有栈协程和无栈协程
+
+根据是否拥有独立调用栈，协程可分为：
+
+**有栈协程（Stackful Coroutine）**：每个协程拥有**独立的调用栈**（通常是固定大小或可动态增长的内存块），用于保存函数调用链、局部变量、返回地址等完整执行上下文。  
+
+* 类比：可理解为“迷你线程”，但调度完全在用户态完成；  
+* 核心特点：能在**任意函数调用位置**挂起（suspend）和恢复（resume），调度灵活性极高。
+
+**无栈协程（Stackless Coroutine）**：协程没有独立的调用栈，其执行上下文（局部变量、程序计数器等）通过**状态机、闭包或编译器生成的结构体**保存，依赖语言或编译器的静态分析。 
+
+* 类比：更像“状态驱动的函数”，执行流程被拆分为多个状态，挂起和恢复本质是状态的切换；  
+* 核心特点：只能在**预定义的挂起点**（如`yield`、`await`关键字处）挂起，灵活性受限，但内存开销更小。
+
+| 维度                | 有栈协程（Stackful）                          | 无栈协程（Stackless）                          |
+|---------------------|----------------------------------------------|----------------------------------------------|
+| **调用栈**          | 有独立调用栈（大小通常可配置）                 | 无独立调用栈，上下文保存在状态机/闭包中         |
+| **挂起位置**        | 任意函数调用处（支持嵌套函数中挂起）           | 仅能在预定义挂起点（如`await`/`yield`处）挂起   |
+| **内存开销**        | 较高（每个协程需分配栈内存，通常KB级）         | 极低（仅保存必要状态，通常几十到几百字节）       |
+| **调度灵活性**      | 高（可在任意位置切换，支持复杂嵌套逻辑）       | 低（挂起点固定，依赖显式关键字标记）             |
+| **实现方式**        | 多通过库实现（依赖汇编或操作系统API操作栈）     | 多依赖编译器支持（编译期将协程转换为状态机）     |
+| **上下文切换成本**  | 较低（仅切换栈指针和寄存器，用户态操作）       | 极低（仅切换状态变量，几乎无开销）               |
+| **适用场景**        | 复杂嵌套逻辑、通用并发（如游戏逻辑、多任务调度） | 简单异步流程（如IO密集型任务、网络请求）         |
+
+不同语言根据设计目标（性能、易用性、兼容性）选择了不同的协程实现，以下是典型案例：
+
+#### Python：`greenlet`库
+
+* **特点**：Python标准库无原生有栈协程，`greenlet`是第三方库，通过C扩展实现有栈协程；  
+* **原理**：每个`greenlet`对象拥有独立的栈，通过`switch()`方法在协程间切换，可在任意函数调用处挂起；  
+
+```python
+from greenlet import greenlet
+
+def func1():
+    print("进入func1")
+    gr2.switch()  # 挂起func1，切换到gr2
+    print("回到func1")  # 从gr2切换回来后执行
+
+def func2():
+    print("进入func2")
+    gr1.switch()  # 挂起func2，切换到gr1
+    print("回到func2")  # 不会执行（未被切换回来）
+
+gr1 = greenlet(func1)
+gr2 = greenlet(func2)
+gr1.switch()  # 启动gr1
+# 输出：
+# 进入func1
+# 进入func2
+# 回到func1
+```
+
+#### Lua：`coroutine`库
+
+* **特点**：Lua原生支持有栈协程，是语言核心特性，每个协程有独立的调用栈；  
+* **原理**：通过`coroutine.create()`创建协程，`coroutine.resume()`恢复执行，`coroutine.yield()`挂起，可在任意位置`yield`；  
+
+```lua
+function task()
+    print("任务开始")
+    coroutine.yield()  -- 挂起，可在函数任意位置调用
+    print("任务恢复")
+end
+
+co = coroutine.create(task)
+
+print(coroutine.status(co))  -- 输出：suspended（未运行）
+
+coroutine.resume(co)  -- 启动协程，输出：任务开始
+print(coroutine.status(co))  -- 输出：suspended（挂起）
+
+coroutine.resume(co)  -- 恢复协程，输出：任务恢复
+print(coroutine.status(co))  -- 输出：dead（结束）
+```
+
+#### （3）Go：Goroutine（特殊的有栈协程）
+- **特点**：Goroutine是Go的核心并发原语，本质是有栈协程，但由Go runtime而非用户手动调度；  
+- **特殊之处**：  
+  - 栈可动态增长（初始仅2KB，按需扩展至GB级），避免固定栈大小的限制；  
+  - 由Go runtime的M:N调度器（映射到内核线程）自动调度，兼顾灵活性和性能；  
+- **示例**：
+  ```go
+  package main
+
+  import (
+      "fmt"
+      "time"
+  )
+
+  func task(id int) {
+      for i := 0; i < 3; i++ {
+          fmt.Printf("协程%d: %d\n", id, i)
+          time.Sleep(100 * time.Millisecond)  // 模拟IO等待，主动让渡CPU
+      }
+  }
+
+  func main() {
+      go task(1)  // 启动协程1
+      go task(2)  // 启动协程2
+      time.Sleep(1 * time.Second)  // 等待协程完成
+  }
+  ```
+  - 关键点：Goroutine可在任意位置（如`Sleep`、通道操作）被调度器挂起，无需显式`yield`，是“隐式有栈协程”的典型。
+
+
+### 2. 无栈协程的实践
+#### （1）C++20：`std::coroutine`
+- **特点**：C++20引入无栈协程，完全由编译器实现（无运行时依赖），通过状态机转换协程函数；  
+- **原理**：编译器将含`co_await`/`co_yield`的函数转换为包含状态变量、局部变量的结构体，挂起时保存状态，恢复时读取状态；  
+- **示例**（简化版）：
+  ```cpp
+  #include <iostream>
+  #include <coroutine>
+
+  // 协程返回类型（需满足coroutine_traits要求）
+  struct Task {
+      struct promise_type {
+          Task get_return_object() { return {}; }
+          std::suspend_never initial_suspend() { return {}; }
+          std::suspend_never final_suspend() noexcept { return {}; }
+          void return_void() {}
+          void unhandled_exception() {}
+      };
+  };
+
+  Task counter() {
+      for (int i = 0; i < 3; ++i) {
+          std::cout << "计数: " << i << std::endl;
+          co_await std::suspend_always{};  // 挂起点（仅能在此处挂起）
+      }
+  }
+
+  int main() {
+      auto task = counter();
+      // 需手动驱动协程（实际中由调度器管理）
+      std::cout << "恢复1\n";
+      task.resume();  // 输出：计数: 0
+      std::cout << "恢复2\n";
+      task.resume();  // 输出：计数: 1
+      return 0;
+  }
+  ```
+  - 关键点：仅能在`co_await`处挂起，嵌套函数中若没有`co_await`则无法挂起，体现无栈协程的挂起点限制。
+
+
+#### （2）C#：`async/await`
+- **特点**：C# 5.0引入`async/await`，是典型的无栈协程，由编译器将`async`函数转换为状态机；  
+- **原理**：`await`关键字标记挂起点，编译器生成包含状态、局部变量的类，通过状态切换实现协程的挂起和恢复；  
+- **示例**：
+  ```csharp
+  using System;
+  using System.Threading.Tasks;
+
+  class Program {
+      static async Task<int> FetchData() {
+          Console.WriteLine("开始请求数据");
+          // 仅能在await处挂起（等待异步操作）
+          await Task.Delay(1000);  // 模拟网络请求
+          Console.WriteLine("数据请求完成");
+          return 42;
+      }
+
+      static async Task Main() {
+          var task = FetchData();
+          Console.WriteLine("等待数据中...");
+          int result = await task;  // 恢复协程并获取结果
+          Console.WriteLine($"结果: {result}");
+      }
+  }
+  ```
+  - 关键点：`FetchData`只能在`await`处挂起，若在普通函数（非`async`）中调用则无法挂起，依赖显式标记的挂起点。
+
+
+#### （3）JavaScript：`async/await`
+- **特点**：ES2017引入`async/await`，基于生成器（Generator）实现，本质是无栈协程；  
+- **原理**：`async`函数返回Promise，`await`将函数拆分为多个“微任务”，通过事件循环调度，挂起点固定在`await`处；  
+- **示例**：
+  ```javascript
+  async function fetchData() {
+      console.log("开始请求");
+      await new Promise(resolve => setTimeout(resolve, 1000));  // 挂起点
+      console.log("请求完成");
+      return 42;
+  }
+
+  (async () => {
+      const task = fetchData();
+      console.log("等待中...");
+      const result = await task;  // 恢复并获取结果
+      console.log(`结果: ${result}`);
+  })();
+  ```
+  - 关键点：`await`是唯一挂起点，无法在普通函数中挂起，由JavaScript引擎的事件循环自动调度恢复。
+
+
+#### （4）Python：`asyncio`（原生无栈协程）
+- **特点**：Python 3.5+引入`async/await`，基于生成器实现无栈协程，需配合`asyncio`库调度；  
+- **原理**：`async`函数被编译为生成器，`await`触发状态切换，上下文保存在生成器的`gi_frame`中，无独立栈；  
+- **示例**：
+  ```python
+  import asyncio
+
+  async def task():
+      print("任务开始")
+      await asyncio.sleep(1)  # 仅能在await处挂起（模拟IO）
+      print("任务恢复")
+      return "完成"
+
+  async def main():
+      t = task()
+      print("等待任务...")
+      result = await t  # 恢复任务
+      print(result)
+
+  asyncio.run(main())
+  ```
+  - 关键点：与`greenlet`（有栈）不同，`asyncio`协程不能在普通函数中挂起，必须通过`await`显式标记挂起点。
+
+
+## 五、如何选择：场景决定类型
+1. **优先有栈协程的场景**：  
+   - 逻辑复杂，需要在嵌套函数中频繁挂起（如游戏AI、状态机）；  
+   - 需兼容旧代码，不希望修改函数签名（有栈协程可通过库实现，对代码侵入小）；  
+   - 通用并发任务（如多任务调度器）。  
+
+2. **优先无栈协程的场景**：  
+   - IO密集型任务（如网络爬虫、API服务），挂起点固定（仅在等待IO时挂起）；  
+   - 对内存开销敏感（如百万级协程场景，无栈协程的内存优势明显）；  
+   - 语言原生支持（如C#、JavaScript，用无栈协程更符合语言习惯）。  
+
+
+## 六、总结
+有栈协程和无栈协程是协程的两种实现范式：  
+- 有栈协程以“独立栈”换取灵活性，支持任意位置挂起，但内存开销较高；  
+- 无栈协程以“状态机”换取高效性，挂起点受限，但内存更省、切换更快。  
+
+编程语言的选择往往反映了其设计权衡：系统级语言（如C++、Rust）倾向于无栈协程（性能优先），脚本语言（如Python、Lua）则同时支持两种（灵活性与易用性兼顾），而Go的Goroutine则融合了有栈协程的灵活性和动态栈的高效性，成为并发编程的标杆。理解两者的差异，才能在实际开发中选择最合适的协程模型。
