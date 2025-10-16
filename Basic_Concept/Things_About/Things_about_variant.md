@@ -361,7 +361,32 @@ template<typename _Tag>
 
 通过前一章节，我们理解了 std::variant 的继承结构的组织方式。这一章节我们来认识一些起到辅助作用的元素
 
-**1. `variant_size`：获取备选类型数量**
+**1. `std::monostate`**
+
+作为 `std::variant` 的“空状态”或“占位符”类型，用于解决 `std::variant` 无默认构造函数的场景（当所有备选类型都不可默认构造时，加入 `std::monostate` 可使 `std::variant` 支持默认构造）。
+
+- 无状态（不包含任何数据成员）。
+- 支持所有基础操作：默认构造、复制/移动构造、复制/移动赋值、析构（均为 `noexcept`）。
+- 支持比较操作（`==`、`!=`、`<=>` 等），所有实例均相等。
+
+```cpp
+// libstdc++-v3/include/bits/monostate.h
+  struct monostate { };
+
+  constexpr bool operator==(monostate, monostate) noexcept { return true; }
+#ifdef __cpp_lib_three_way_comparison
+  constexpr strong_ordering
+  operator<=>(monostate, monostate) noexcept { return strong_ordering::equal; }
+#else
+  constexpr bool operator!=(monostate, monostate) noexcept { return false; }
+  constexpr bool operator<(monostate, monostate) noexcept { return false; }
+  constexpr bool operator>(monostate, monostate) noexcept { return false; }
+  constexpr bool operator<=(monostate, monostate) noexcept { return true; }
+  constexpr bool operator>=(monostate, monostate) noexcept { return true; }
+#endif
+```
+
+**2. `variant_size`：获取备选类型数量**
 
 `variant_size` 利用 [`std::integral_constant`](https://en.cppreference.com/w/cpp/types/integral_constant.html) 和 [`sizeof... operator`](https://en.cppreference.com/w/cpp/language/sizeof....html) 实现计算 `variant` 模板参数个数的功能
 
@@ -374,7 +399,10 @@ struct variant_size<variant<_Types...>>
     : std::integral_constant<size_t, sizeof...(_Types)> {};
 ```
 
-#### 2. `variant_alternative`：获取指定索引的类型
+在 C++ 标准库中，`std::variant` 作为联合体（union）的类型安全封装，依赖多个辅助模板类和特性（traits）来实现其功能。结合提供的源码片段，以下是与 `std::variant` 相关的核心帮助模板类的详细解释：
+
+**3. `variant_alternative`：获取指定索引的类型**
+
 ```cpp
 template <size_t _Np, typename _Variant> struct variant_alternative;
 
@@ -389,8 +417,84 @@ struct variant_alternative<_Np, variant<_Types...>> {
 template <size_t _Np, typename _Variant>
 using variant_alternative_t = typename variant_alternative<_Np, _Variant>::type;
 ```
+
 - 功能：通过`variant_alternative_t<0, variant<int, double>>`可获取第0个类型（此处为`int`）。
 - 依赖：`_Nth_type`是内部元函数，用于从类型包中提取第N个类型。
+
+```cpp
+// libstdc++-v3/include/bits/utility.h
+#if _GLIBCXX_USE_BUILTIN_TRAIT(__type_pack_element)
+  template<size_t _Np, typename... _Types>
+    struct _Nth_type
+    { using type = __type_pack_element<_Np, _Types...>; };
+#else
+  template<size_t _Np, typename... _Types>
+    struct _Nth_type
+    { };
+
+  template<typename _Tp0, typename... _Rest>
+    struct _Nth_type<0, _Tp0, _Rest...>
+    { using type = _Tp0; };
+
+  template<typename _Tp0, typename _Tp1, typename... _Rest>
+    struct _Nth_type<1, _Tp0, _Tp1, _Rest...>
+    { using type = _Tp1; };
+
+  template<typename _Tp0, typename _Tp1, typename _Tp2, typename... _Rest>
+    struct _Nth_type<2, _Tp0, _Tp1, _Tp2, _Rest...>
+    { using type = _Tp2; };
+#endif
+```
+
+**4. `hash<variant<typename... _Types>>`**
+
+```cpp
+/// @cond undocumented
+template <typename... _Types> struct __variant_hash {
+#if __cplusplus < 202002L
+  using result_type [[__deprecated__]] = size_t;
+  using argument_type [[__deprecated__]] = variant<_Types...>;
+#endif
+  // 使用折叠表达式检查所有类型的哈希操作是否都是 noexcept
+  size_t operator()(const variant<_Types...> &__t) const
+      noexcept((is_nothrow_invocable_v<hash<decay_t<_Types>>, _Types> && ...)) {  
+    size_t __ret;
+    __detail::__variant::__raw_visit(
+        [&__t, &__ret](auto &&__t_mem) mutable {
+          using _Type = __remove_cvref_t<decltype(__t_mem)>;
+          if constexpr (!is_same_v<_Type,
+                                   __detail::__variant::__variant_cookie>)
+            __ret =
+                std::hash<size_t>{}(__t.index()) + std::hash<_Type>{}(__t_mem);
+          else
+            __ret = std::hash<size_t>{}(__t.index());
+        },
+        __t);
+    return __ret;
+  }
+};
+/// @endcond
+
+template <typename... _Types>
+struct hash<variant<_Types...>>
+    : __conditional_t<(__is_hash_enabled_for<remove_const_t<_Types>> && ...),
+                      __variant_hash<_Types...>,
+                      __hash_not_enabled<variant<_Types...>>>
+{
+};
+```
+
+- 使用折叠表达式检查所有类型的哈希操作是否都是 noexcept: `(is_nothrow_invocable_v<hash<decay_t<_Types>>, _Types> && ...)` 展开为：
+  `is_nothrow_invocable_v<hash<T1>, T1> && is_nothrow_invocable_v<hash<T2>, T2> && ...`
+- 使用 `__raw_visit` 直接访问 variant 的当前存储值
+  - 如果当前存储的不是 `__variant_cookie`（表示有效值），计算组合哈希
+  - 如果是 `__variant_cookie`（无效状态），只使用索引哈希
+- 使用 `__conditional_t` 在编译时选择基类
+  - **条件**：`(__is_hash_enabled_for<remove_const_t<_Types>> && ...)`
+    - 检查所有 `_Types` 是否都支持哈希
+    - 使用折叠表达式确保所有类型都有可用的 `std::hash` 特化
+  - 如果所有类型都可哈希：继承 `__variant_hash<_Types...>`
+  - 如果有类型不可哈希：继承 `__hash_not_enabled<variant<_Types...>>`（这通常会导致编译时错误，提供清晰的错误信息）
 
 
 ### 四、存储实现
