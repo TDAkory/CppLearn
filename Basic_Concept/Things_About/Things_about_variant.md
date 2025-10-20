@@ -829,35 +829,127 @@ __gen_vtable_impl<Array<2,3>, index_sequence<>>
 `__gen_vtable_impl` 表生成器
 
 ```cpp
+// __dimensions...：剩余未处理的维度大小，__indices...：已经确定的索引序列(当前递归路径)
 template <typename _Result_type, typename _Visitor, size_t... __dimensions,
           typename... _Variants, size_t... __indices>
 struct __gen_vtable_impl<
     _Multi_array<_Result_type (*)(_Visitor, _Variants...), __dimensions...>,
     std::index_sequence<__indices...>> {
+  // 确定当前要处理的 variant
+  // sizeof...(__indices) 表示已处理的维度数
+  // _Nth_type<N, _Variants...> 获取第 N 个 variant 类型
+  using _Next = remove_reference_t<
+      typename _Nth_type<sizeof...(__indices), _Variants...>::type>;
+  using _Array_type =
+      _Multi_array<_Result_type (*)(_Visitor, _Variants...), __dimensions...>;
+
   static constexpr _Array_type _S_apply() {
     _Array_type __vtable{};
-    // 为当前维度的每个索引生成子表
     _S_apply_all_alts(__vtable, make_index_sequence<variant_size_v<_Next>>());
     return __vtable;
+  }
+
+  template <size_t... __var_indices>
+  static constexpr void
+  _S_apply_all_alts(_Array_type &__vtable,
+                    std::index_sequence<__var_indices...>) {
+    if constexpr (__extra_visit_slot_needed<_Result_type, _Next>)
+      (_S_apply_single_alt<true, __var_indices>(
+           __vtable._M_arr[__var_indices + 1], &(__vtable._M_arr[0])),
+       ...);
+    else
+      (_S_apply_single_alt<false, __var_indices>(
+           __vtable._M_arr[__var_indices]),
+       ...);
+  }
+
+  template <bool __do_cookie, size_t __index, typename _Tp>
+  static constexpr void _S_apply_single_alt(_Tp &__element,
+                                            _Tp *__cookie_element = nullptr) {
+    if constexpr (__do_cookie) {
+      // 处理需要无值状态槽位的情况
+      __element = __gen_vtable_impl<
+          _Tp, std::index_sequence<__indices..., __index>>::_S_apply();
+      *__cookie_element = __gen_vtable_impl<
+          _Tp, std::index_sequence<__indices..., variant_npos>>::_S_apply();
+    } else {
+      // 正常情况：递归生成下一层
+      auto __tmp_element = __gen_vtable_impl<
+          remove_reference_t<decltype(__element)>,
+          std::index_sequence<__indices..., __index>>::_S_apply();
+      static_assert(is_same_v<_Tp, decltype(__tmp_element)>,
+                    "std::visit requires the visitor to have the same "
+                    "return type for all alternatives of a variant");
+      __element = __tmp_element;
+    }
   }
 };
 
 // This partial specialization is the base case for the recursion.
 // It populates a _Multi_array element with the address of a function
 // that invokes the visitor with the alternatives specified by __indices.
+// 这个偏特化处理所有维度都已处理完毕的情况，生成实际的函数指针
+// 没有 __dimensions... 参数，表示零维数组（单个元素）
+// __indices... 包含完整的索引路径
 template <typename _Result_type, typename _Visitor, typename... _Variants,
           size_t... __indices>
 struct __gen_vtable_impl<_Multi_array<_Result_type (*)(_Visitor, _Variants...)>,
                          std::index_sequence<__indices...>> {
-  static constexpr auto _S_apply() {
-    return _Array_type{&__visit_invoke};  // 返回函数指针
+  using _Array_type = _Multi_array<_Result_type (*)(_Visitor, _Variants...)>;
+
+  // 根据索引获取 variant 中的值，或返回特殊标记
+  template <size_t __index, typename _Variant>
+  static constexpr decltype(auto)
+  __element_by_index_or_cookie(_Variant &&__var) noexcept {
+    if constexpr (__index != variant_npos)
+      return __variant::__get<__index>(std::forward<_Variant>(__var));
+    else
+      return __variant_cookie{};
   }
-  
+
+  // 核心调用函数
   static constexpr decltype(auto) __visit_invoke(_Visitor &&__visitor,
                                                  _Variants... __vars) {
-    // 实际调用访问器的函数
-    return std::__invoke(std::forward<_Visitor>(__visitor),
-                         __get<__indices>(std::forward<_Variants>(__vars))...);
+    if constexpr (is_same_v<_Result_type, __variant_idx_cookie>)
+      // For raw visitation using indices, pass the indices to the visitor
+      // and discard the return value:
+      // /带索引的原始访问（无返回值）
+      std::__invoke(std::forward<_Visitor>(__visitor),
+                    __element_by_index_or_cookie<__indices>(
+                        std::forward<_Variants>(__vars))...,
+                    integral_constant<size_t, __indices>()...);
+    else if constexpr (is_same_v<_Result_type, __variant_cookie>)
+      // For raw visitation without indices, and discard the return value:
+      // 不带索引的原始访问（无返回值）
+      std::__invoke(std::forward<_Visitor>(__visitor),
+                    __element_by_index_or_cookie<__indices>(
+                        std::forward<_Variants>(__vars))...);
+    else if constexpr (_Array_type::__result_is_deduced::value)
+      // For the usual std::visit case deduce the return value:
+      // 自动推导返回类型
+      return std::__invoke(std::forward<_Visitor>(__visitor),
+                           __element_by_index_or_cookie<__indices>(
+                               std::forward<_Variants>(__vars))...);
+    else // for std::visit<R> use INVOKE<R>
+      // 显式指定返回类型
+      return std::__invoke_r<_Result_type>(
+          std::forward<_Visitor>(__visitor),
+          __variant::__get<__indices>(std::forward<_Variants>(__vars))...);
+  }
+
+  static constexpr auto _S_apply() {
+    if constexpr (_Array_type::__result_is_deduced::value) {
+      constexpr bool __visit_ret_type_mismatch =
+          !is_same_v<typename _Result_type::type,
+                     decltype(__visit_invoke(std::declval<_Visitor>(),
+                                             std::declval<_Variants>()...))>;
+      if constexpr (__visit_ret_type_mismatch) {
+        struct __cannot_match {};
+        return __cannot_match{};
+      } else
+        return _Array_type{&__visit_invoke};
+    } else
+      return _Array_type{&__visit_invoke};
   }
 };
 ```
@@ -881,12 +973,10 @@ _Multi_array<void(*)(Visitor, V1&&, V2&&), 2, 3>
 ```cpp
 // 假设调用：visit(visitor, var1, var2)
 // 其中：var1: variant<int, string> (2种类型)
-//       var2: variant<double, float> (2种类型)
+//      var2: variant<double, float> (2种类型)
 ```
 
-
-
-### 第1层：初始调用
+首先是第一层的初始调用
 
 ```cpp
 // 实例化 __gen_vtable
@@ -896,7 +986,7 @@ using VTable = __gen_vtable<void, Visitor&&, Var1&&, Var2&&>;
 _Multi_array<void(*)(Visitor&&, Var1&&, Var2&&), 2, 2>
 ```
 
-### 第2层：递归展开开始
+然后 __gen_vtable 会利用 __gen_vtable_impl 进行递归的展开
 
 ```cpp
 // 进入 __gen_vtable_impl 主模板
@@ -906,10 +996,11 @@ __gen_vtable_impl<
 ```
 
 此时：
+
 - `sizeof...(__indices) = 0` （还没有处理任何维度）
 - `_Next = Var1` （第一个variant类型）
 
-#### 展开 `_S_apply_all_alts`：
+展开 `_S_apply_all_alts`：
 
 ```cpp
 // 为第一个variant的每个可能索引生成子表
@@ -920,9 +1011,8 @@ _S_apply_single_alt<false, 0>(__vtable._M_arr[0]);
 _S_apply_single_alt<false, 1>(__vtable._M_arr[1]);
 ```
 
-### 第3层：处理第一个维度
+处理第一个维度，对于索引0：
 
-#### 对于索引0：
 ```cpp
 _S_apply_single_alt<false, 0>(__vtable._M_arr[0]) {
     auto __tmp_element = __gen_vtable_impl<
@@ -933,7 +1023,8 @@ _S_apply_single_alt<false, 0>(__vtable._M_arr[0]) {
 }
 ```
 
-#### 对于索引1：
+对于索引1：
+
 ```cpp
 _S_apply_single_alt<false, 1>(__vtable._M_arr[1]) {
     auto __tmp_element = __gen_vtable_impl<
@@ -944,9 +1035,7 @@ _S_apply_single_alt<false, 1>(__vtable._M_arr[1]) {
 }
 ```
 
-### 第4层：处理第二个维度
-
-现在进入更深层的递归，以 `index_sequence<0>` 为例：
+处理第二个维度，现在进入更深层的递归，以 `index_sequence<0>` 为例：
 
 ```cpp
 __gen_vtable_impl<
@@ -955,10 +1044,11 @@ __gen_vtable_impl<
 ```
 
 此时：
+
 - `sizeof...(__indices) = 1` （已处理1个维度）
 - `_Next = Var2` （第二个variant类型）
 
-#### 展开第二个维度的 `_S_apply_all_alts`：
+展开第二个维度的 `_S_apply_all_alts`：
 
 ```cpp
 // 为第二个variant的每个可能索引生成子表
@@ -968,8 +1058,6 @@ _S_apply_all_alts(__vtable, std::index_sequence<0, 1>{});
 _S_apply_single_alt<false, 0>(__vtable._M_arr[0]);
 _S_apply_single_alt<false, 1>(__vtable._M_arr[1]);
 ```
-
-### 第5层：基本情况（生成函数指针）
 
 现在进入最深层，生成实际的函数指针：
 
@@ -988,7 +1076,7 @@ _Multi_array<void(*)(Visitor&&, Var1&&, Var2&&)>{
 }
 ```
 
-#### `__visit_invoke` 的具体实现：
+`__visit_invoke` 的具体实现：
 
 ```cpp
 static constexpr decltype(auto) __visit_invoke(Visitor&& __visitor,
@@ -998,8 +1086,6 @@ static constexpr decltype(auto) __visit_invoke(Visitor&& __visitor,
                          __get<0>(std::forward<Var2>(__var2))); // double
 }
 ```
-
-## 📊 最终生成的多维表结构
 
 经过完整的递归展开，生成如下的二维函数指针表：
 
@@ -1024,10 +1110,6 @@ _Multi_array<void(*)(Visitor&&, Var1&&, Var2&&), 2, 2> vtable = {
 };
 ```
 
-## 🔧 特殊情况处理
-
-### 无值状态支持
-
 如果 variant 可能处于无值状态，会生成额外的槽位：
 
 ```cpp
@@ -1038,7 +1120,7 @@ if constexpr (__extra_visit_slot_needed<_Result_type, _Next>)
 
 这会为每个维度添加一个处理 `variant_npos` 的特殊情况。
 
-### 返回类型推导
+返回类型推导
 
 ```cpp
 if constexpr (_Array_type::__result_is_deduced::value) {
@@ -1049,8 +1131,6 @@ if constexpr (_Array_type::__result_is_deduced::value) {
     return std::__invoke_r<_Result_type>(visitor, args...);
 }
 ```
-
-## 🎯 运行时访问过程
 
 编译时生成表后，运行时访问极其高效：
 
@@ -1064,13 +1144,11 @@ func_ptr(std::forward<Visitor>(visitor),
          std::forward<Var2>(var2));
 ```
 
-## 💡 设计优势
+回过头来看，这样设计的优势在于：
 
-### 1. **编译时完全展开**
-- 所有函数指针在编译期确定
-- 零运行时初始化开销
+- 所有函数指针在编译期确定，零运行时初始化开销
+- 递归深度是可控的
 
-### 2. **递归深度可控**
 ```cpp
 // 递归基：当没有更多维度时
 template <typename _Result_type, typename _Visitor, typename... _Variants,
@@ -1079,15 +1157,9 @@ struct __gen_vtable_impl<_Multi_array<_Result_type (*)(_Visitor, _Variants...)>,
                          std::index_sequence<__indices...>>
 ```
 
-### 3. **类型安全**
-- 每个索引组合都有对应的类型安全函数
-- 编译时验证所有可能的类型组合
+- 每个索引组合都有对应的类型安全函数，编译时验证所有可能的类型组合
+- 生成的多维表可能很大，但访问是 O(1)，适合variant类型数量适中的场景
 
-### 4. **空间换时间**
-- 生成的多维表可能很大，但访问是 O(1)
-- 适合variant类型数量适中的场景
-
-这种递归展开机制体现了 C++ 模板元编程的强大能力，在编译期构建复杂的数据结构，为运行时提供最优的性能表现。
 ## 一些引申的思考
 
 ### 为什么`struct _Uninitialized`需要针对`std::is_trivially_destructible_v`进行特化
