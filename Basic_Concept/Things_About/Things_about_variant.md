@@ -23,6 +23,17 @@
   - [一些引申的思考](#一些引申的思考)
     - [为什么`struct _Uninitialized`需要针对`std::is_trivially_destructible_v`进行特化](#为什么struct-_uninitialized需要针对stdis_trivially_destructible_v进行特化)
     - [内存分析](#内存分析)
+    - [与其他工具的对比](#与其他工具的对比)
+  - [用法示例](#用法示例)
+    - [构造](#构造)
+    - [访问](#访问)
+    - [修改](#修改)
+    - [通过`overload`辅助类实现类switch-case语义](#通过overload辅助类实现类switch-case语义)
+    - [结合`overload`实现状态机](#结合overload实现状态机)
+    - [返回统一类型](#返回统一类型)
+    - [多个`variant`组合访问](#多个variant组合访问)
+    - [通过`variant`返回不同类型的值](#通过variant返回不同类型的值)
+    - [利用`variant`实现异构容器](#利用variant实现异构容器)
 
 `std::variant` 是C++17标准库中引入的一个重要组件，它提供了一种类型安全的联合体（union）实现。在C++17之前，开发者需要使用传统的C风格联合体、继承多态或第三方库（如Boost.Variant）来实现类似的功能，但这些方案都有各自的局限性。
 
@@ -48,9 +59,10 @@
 ## 源码分析
 
 > gcc           libstdc++-v3/include/std/variant
+>
 > llvm-libcxx   libcxx/include/variant
 
-我们先以分析`releases/gcc-15.2.0`的实现（位于`libstdc++-v3/include/std/variant`），然后再回头看看llvm的实现有什么区别。
+本文主要分析GCC `releases/gcc-15.2.0`的实现（位于`libstdc++-v3/include/std/variant`）
 
 ### 继承体系
 
@@ -778,7 +790,7 @@ constexpr _Tp &get(variant<_Types...> &__v) {
 }
 ```
 
-#### `visit`
+#### [`visit`](https://en.cppreference.com/w/cpp/utility/variant/visit2.html)
 
 `visit`是`variant`最强大的功能之一，允许用统一的访问器处理所有可能的活跃类型，实现类似多态的行为。
 
@@ -1335,60 +1347,34 @@ struct _Variant_storage {
 
 那么 `__index_type` 又是如何选定的呢？
 
-八、C++版本兼容性
-源码通过宏（如`__cpp_lib_variant`）适配不同C++标准：
-- **C++17**：基础功能，支持`visit`、`get`等。
-- **C++20**：增强`constexpr`支持，添加三路比较运算符（`<=>`）。
-- **C++26**：新增成员函数`visit`（`v.visit(visitor)`替代`std::visit(visitor, v)`）。
-
-
-九、总结
-`std::variant`的实现是C++元编程和异常安全设计的典范，核心亮点包括：
-1. **类型安全**：通过编译期类型检查和运行时索引验证，避免传统`union`的未定义行为。
-2. **高效存储**：递归联合体+对齐缓冲区，保证内存紧凑且正确对齐。
-3. **异常安全**：通过临时对象中转和`valueless_by_exception`状态，提供可预测的错误处理。
-4. **灵活访问**：`visit`函数通过编译期跳转表实现多态访问，兼顾灵活性与性能。
-
-理解`variant`的源码有助于深入掌握C++类型系统、元编程技巧和异常安全设计原则。
-
-
-2.2 类型安全保证
-std::variant 提供了全面的类型安全保证，包括：
-1. 编译期类型检查：
-  - 只能存储模板参数中指定的类型
-  - 模板参数必须是非数组的对象类型
-  - 所有操作都有严格的类型约束
-2. 运行时类型检查：
-  - get<T>() 和 get<I>() 在类型不匹配时抛出 std::bad_variant_access 异常
-  - get_if<T>() 和 get_if<I>() 在类型不匹配时返回 nullptr
-  - holds_alternative<T>() 检查当前是否持有特定类型
-3. 类型转换安全：
-  - 赋值和构造时会根据重载解析规则选择最佳匹配类型
-  - 禁止可能导致数据丢失的隐式转换
-std::variant 的类型安全是在编译期和运行时两个层面共同保证的。编译期检查防止了无效类型的使用，而运行时检查确保了对当前持有类型的安全访问。
-
-
-其中，index_type 的大小根据类型数量自动选择：
-- 如果类型数量 ≤ 256，使用 uint8_t
-- 如果类型数量 ≤ 65536，使用 uint16_t
-- 否则使用更大的整数类型
-对齐要求遵循最严格的类型对齐要求，可能导致额外的填充字节：
-alignof(std::variant<Types...>) = max(alignof(Types...))
-
-在GCC的实现中，相关代码如下：
+```cpp
 template <typename... _Types>
 using __select_index =
-  typename __select_int::_Select_int_base<sizeof...(_Types),
-                                  unsigned char,
-                                  unsigned short>::type::value_type;
+    typename __select_int::_Select_int_base<sizeof...(_Types), unsigned char,
+                                            unsigned short>::type::value_type;
 
-3.2 类型索引跟踪
-std::variant 使用一个索引成员来跟踪当前存储的类型：
-using __index_type = __select_index<_Types...>;
-__index_type _M_index;
+// libstdc++-v3/include/bits/parse_numbers.h
+namespace __select_int {
+  ……
+  template<unsigned long long _Val, typename _IntType, typename... _Ints>
+    struct _Select_int_base<_Val, _IntType, _Ints...>
+    : __conditional_t<(_Val <= __gnu_cxx::__int_traits<_IntType>::__max),
+        integral_constant<_IntType, (_IntType)_Val>,
+        _Select_int_base<_Val, _Ints...>>
+    { };
+  ……
+}
+```
+
+可以看到，index_type 的大小根据类型数量自动选择：
+
+- 如果类型数量 ≤ 256，使用 uint8_t
+- 如果类型数量 ≤ 65536，使用 uint16_t
+- 理论上可以支持更的整数类型，不过在gcc的实现中最大只到`unsigned short`
 
 索引值从0开始，对应于模板参数列表中的类型顺序。特殊值 variant_npos（通常是 size_t 的最大值）用于表示"valueless by exception"状态。
-在GCC的实现中，相关代码如下：
+
+```cpp
 inline constexpr size_t variant_npos = -1;
 
 constexpr size_t index() const noexcept
@@ -1402,436 +1388,125 @@ constexpr bool _M_valid() const noexcept
     return true;
   return this->_M_index != __index_type(variant_npos);
 }
+```
 
-3.3 递归联合体实现
-std::variant 的核心存储机制是一个递归联合体（recursive union），它允许存储任意数量的类型。在GCC的实现中，这个递归联合体称为 _Variadic_union：
-template<bool __trivially_destructible, typename _First, typename... _Rest>
-union _Variadic_union<__trivially_destructible, _First, _Rest...>
-{
-  _Uninitialized<_First> _M_first;
-  _Variadic_union<__trivially_destructible, _Rest...> _M_rest;
-  // ...
-};
+对齐要求遵循最严格的类型对齐要求，可能导致额外的填充字节：
 
-// 递归基础情况
-template<bool __trivially_destructible, typename... _Types>
-union _Variadic_union
-{
-  _Variadic_union() = default;
-  
-  template<size_t _Np, typename... _Args>
-  _Variadic_union(in_place_index_t<_Np>, _Args&&...) = delete;
-};
+`alignof(std::variant<Types...>) = max(alignof(Types...))`
 
-每个类型都被包装在 _Uninitialized 中，以处理不同的析构行为：
-// 对于可平凡析构的类型
-template<typename _Type, bool>
-struct _Uninitialized
-{
-  template<typename... _Args>
-  constexpr
-  _Uninitialized(in_place_index_t<0>, _Args&&... __args)
-  : _M_storage(std::forward<_Args>(__args)...)
-  { }
+### 与其他工具的对比
 
-  _Type _M_storage;
-};
+`std::variant`与传统`union`比较。传统`union`是C风格联合体，仅提供原始内存共享能力。
 
-// 对于不可平凡析构的类型
-template<typename _Type>
-struct _Uninitialized<_Type, false>
-{
-  template<typename... _Args>
-  constexpr
-  _Uninitialized(in_place_index_t<0>, _Args&&... __args)
-  {
-    ::new ((void*)std::addressof(_M_storage))
-      _Type(std::forward<_Args>(__args)...);
-  }
+| 维度         | `std::variant`                          | 传统`union`                          |
+|--------------|----------------------------------------|--------------------------------------|
+| 类型安全     | 完全类型安全（编译期检查）| 不安全，需手动跟踪当前存储类型，易引发未定义行为 |
+| 非POD类型支持 | 支持任何可复制构造的类型（如`std::string`、自定义类） | 仅支持POD类型，非POD类型需手动管理构造/析构 |
+| 默认值       | 默认构造为第一个类型                     | 无定义初始状态，需手动初始化           |
+| 析构行为     | 自动调用当前类型的析构函数               | 需手动调用析构函数，否则导致资源泄漏   |
+| 内存开销     | 额外存储类型索引（通常1~2字节）| 仅存储值，无额外开销                  |
+| 使用复杂度   | 提供`std::visit`、`std::get`等高级API，易于安全使用 | 低级API，需手动维护类型状态，容易出错  |
 
-  __gnu_cxx::__aligned_membuf<_Type> _M_storage;
-};
+`std::variant`与`boost::variant`比较
 
-这种设计使得 variant 可以存储任意数量的类型，同时正确处理构造和析构行为。
-1. 类型安全实现机制
-4.1 编译期类型检查
-std::variant 使用多种编译期类型检查机制来确保类型安全：
-[图片]
-静态断言
-静态断言用于在编译期验证类型满足基本要求：
-static_assert(sizeof...(_Types) > 0,
-        "variant must have at least one alternative");
-        
-static_assert(((std::is_object_v<_Types> && !is_array_v<_Types>) && ...),
-        "variant alternatives must be non-array object types");
+| 维度         | `std::variant`                          | `boost::variant`                      |
+|--------------|----------------------------------------|--------------------------------------|
+| 无值状态     | 支持`valueless_by_exception`（异常时可能无值） | 始终持有一个值（`never-empty`保证）|
+| 递归变体     | 不直接支持递归类型（如`variant<int, variant<int, string>>`） | 通过`recursive_wrapper`支持递归变体   |
+| 访问API      | `std::visit`（访问者模式）、`std::get`       | `apply_visitor`、`get`                |
+| 引用支持     | 不支持存储引用类型                       | 可通过`wrapper`支持引用类型           |
+| 性能         | 通常更优化（标准库原生支持，编译期优化多）| 稍慢但功能更丰富（如更多辅助工具）|
+| 标准支持     | C++17标准库原生支持                      | 需额外依赖Boost库                    |
 
-SFINAE约束
-使用 enable_if_t 限制模板实例化，确保只有符合条件的类型才能使用特定操作：
-template<typename _Tp, typename... _Args>
-_GLIBCXX20_CONSTEXPR
-enable_if_t<is_constructible_v<_Tp, _Args...> && __exactly_once<_Tp>,
-            _Tp&>
-emplace(_Args&&... __args);
+`std::variant`与`std::any`比较。`std::any`是C++17引入的**动态类型容器**，可存储任意类型（运行时类型检查）。
 
-类型特征检查
-使用辅助模板确保类型唯一性和其他特性：
-template<typename _Tp, typename... _Types>
-inline constexpr bool __exactly_once
-  = std::__find_uniq_type_in_pack<_Tp, _Types...>() < sizeof...(_Types);
+| 维度         | `std::variant`                          | `std::any`                           |
+|--------------|----------------------------------------|--------------------------------------|
+| 类型安全     | 编译期已知类型集（静态类型检查）| 任意类型，运行时类型检查（动态安全）|
+| 内存模型     | 通常在栈上存储，无动态分配（除非类型过大） | 可能需要动态分配（存储大类型或非平凡类型时） |
+| 性能         | 更高效（无类型擦除开销，编译期优化）| 存在类型擦除开销，运行时类型检查有性能损耗 |
+| 灵活性       | 有限的预定义类型集（需在编译期指定所有可能类型） | 完全动态，可存储任意类型             |
+| 使用场景     | 已知类型集的多态场景（如配置项、状态机）| 完全动态类型系统（如脚本引擎、序列化）|
 
-4.2 运行时类型检查
-在运行时，std::variant 使用索引来确保类型安全：
-索引验证
-在访问前验证索引与请求的类型匹配：
-template<size_t _Np, typename... _Types>
-constexpr variant_alternative_t<_Np, variant<_Types...>>&
-get(variant<_Types...>& __v)
-{
-  static_assert(_Np < sizeof...(_Types),
-        "The index must be in [0, number of alternatives)");
-  if (__v.index() != _Np)
-    __throw_bad_variant_access(__v.valueless_by_exception());
-  return __detail::__variant::__get<_Np>(__v);
-}
+适用场景
 
-异常抛出
-当访问错误类型或无效状态时抛出异常：
-[[noreturn]] void __throw_bad_variant_access(unsigned);
+- **选择`std::variant`**：当类型集在编译期确定，需类型安全、低开销的多态存储时（如状态机、配置解析）。
+- **选择传统`union`**：仅在需极致内存开销且处理POD类型的底层场景（如硬件驱动）。
+- **选择`boost::variant`**：若项目依赖Boost且需递归变体、引用支持等高级功能，且无需标准库原生支持时。
+- **选择`std::any`**：当需完全动态的类型存储（如插件系统、动态脚本交互），可接受运行时类型检查开销时。
 
-4.3 类型转换安全
-std::variant 的转换构造函数和赋值运算符使用了 __accepted_index 模板来确定目标类型：
-template<typename _Tp>
-static constexpr size_t __accepted_index
-  = __detail::__variant::__accepted_index<_Tp, variant>;
+## 用法示例
 
-__accepted_index 的实现使用了一个巧妙的技术，通过模拟函数重载解析来确定最佳匹配类型：
-template<typename _Tp, typename _Variant>
-using _FUN_type
-  = decltype(_Build_FUNs<_Tp, _Variant>::_S_fun(std::declval<_Tp>()));
+### 构造
 
-template<typename _Tp, typename _Variant, typename = void>
-inline constexpr size_t
-__accepted_index = variant_npos;
+```cpp
+// 默认构造（构造第一个类型的默认值）
+std::variant<int, std::string> v1;  // 包含int(0)
 
-template<typename _Tp, typename _Variant>
-inline constexpr size_t
-__accepted_index<_Tp, _Variant, void_t<_FUN_type<_Tp, _Variant>>>
-  = _FUN_type<_Tp, _Variant>::value;
+// 从特定类型构造
+std::variant<int, std::string> v2 = "hello";  // 包含std::string("hello")
 
-这种设计确保了类型转换遵循C++标准中定义的规则，避免了意外的隐式转换。
-5. 访问者模式设计与实现
-5.1 std::visit的工作原理
-std::visit 是 std::variant 提供的一种强大的访问机制，它实现了访问者模式（Visitor Pattern）：
-template<typename _Visitor, typename... _Variants>
-constexpr auto visit(_Visitor&& __visitor, _Variants&&... __variants);
+// 使用in_place_type直接构造
+std::variant<int, std::string> v3(std::in_place_type<std::string>, "world");
 
-[图片]
-std::visit 的基本工作原理是：
-1. 检查所有variant参数是否有任何一个处于无效状态，如有则抛出异常
-2. 确定返回类型（通常是访问者函数对所有可能类型组合的返回类型）
-3. 根据variant的当前索引，调用访问者函数处理对应的类型
-template<typename _Visitor, typename... _Variants>
-constexpr __detail::__variant::__visit_result_t<_Visitor, _Variants...>
-visit(_Visitor&& __visitor, _Variants&&... __variants)
-{
-  namespace __variant = std::__detail::__variant;
+// 使用in_place_index按索引构造
+std::variant<int, std::string> v4(std::in_place_index<1>, "world");
+```
 
-  if ((__variant::__as(__variants).valueless_by_exception() || ...))
-    __throw_bad_variant_access(2);
+### 访问
 
-  using _Result_type
-    = __detail::__variant::__visit_result_t<_Visitor, _Variants...>;
-
-  using _Tag = __detail::__variant::__deduce_visit_result<_Result_type>;
-
-  // ...
-  
-  return std::__do_visit<_Tag>(
-    std::forward<_Visitor>(__visitor),
-    __variant::__as(std::forward<_Variants>(__variants))...);
-}
-
-5.2 多维虚表生成
-std::visit 的核心实现依赖于编译期生成的多维虚表（multi-dimensional virtual table）：
-template<typename _Result_type, typename _Visitor, typename... _Variants>
-struct __gen_vtable
-{
-  using _Array_type =
-    _Multi_array<_Result_type (*)(_Visitor, _Variants...),
-                 variant_size_v<remove_reference_t<_Variants>>...>;
-
-  static constexpr _Array_type _S_vtable
-    = __gen_vtable_impl<_Array_type, std::index_sequence<>>::_S_apply();
-};
-
-_Multi_array 是一个多维数组，其维度由variant类型数量和每个variant的替代项数量决定：
-template<typename _Tp, size_t... _Dimensions>
-struct _Multi_array;
-
-template<typename _Tp>
-struct _Multi_array<_Tp>
-{
-  // ...
-  typename __untag_result<_Tp>::element_type _M_data;
-};
-
-template<typename _Ret, typename _Visitor, typename... _Variants,
-         size_t __first, size_t... __rest>
-struct _Multi_array<_Ret(*)(_Visitor, _Variants...), __first, __rest...>
-{
-  // ...
-  _Multi_array<_Tp, __rest...> _M_arr[__first + __do_cookie];
-};
-
-虚表通过递归模板实例化在编译期填充，为每种可能的类型组合生成一个函数指针。
-5.3 访问者模式优化策略
-为了提高性能，std::visit 实现了多种优化策略：
-单一variant优化
-对于单个variant和少量替代项的情况，使用switch-case优化而非虚表：
-if constexpr (sizeof...(_Variants) > 1 || __n > __max)
-{
-  // 使用虚表
-  constexpr auto& __vtable = __detail::__variant::__gen_vtable<
-    _Result_type, _Visitor&&, _Variants&&...>::_S_vtable;
-
-  auto __func_ptr = __vtable._M_access(__variants.index()...);
-  return (*__func_ptr)(std::forward<_Visitor>(__visitor),
-                       std::forward<_Variants>(__variants)...);
-}
-else // 单个variant，少量替代项
-{
-  // 使用switch-case优化
-  switch (__v0.index())
-  {
-    _GLIBCXX_VISIT_CASE(0)
-    _GLIBCXX_VISIT_CASE(1)
-    // ...
-    _GLIBCXX_VISIT_CASE(10)
-    // ...
-  }
-}
-
-访问者示例
-// 定义访问者
-struct Visitor {
-    void operator()(int i) { std::cout << "整数: " << i << std::endl; }
-    void operator()(const std::string& s) { std::cout << "字符串: " << s << std::endl; }
-    void operator()(double d) { std::cout << "浮点数: " << d << std::endl; }
-};
-
-// 创建variant
-std::variant<int, std::string, double> v = 42;
-
-// 使用访问者
-std::visit(Visitor{}, v);  // 输出: 整数: 42
-
-// 使用泛型lambda作为访问者
-std::visit([](const auto& val) {
-    using T = std::decay_t<decltype(val)>;
-    if constexpr (std::is_same_v<T, int>)
-        std::cout << "整数: " << val << std::endl;
-    else if constexpr (std::is_same_v<T, std::string>)
-        std::cout << "字符串: " << val << std::endl;
-    else
-        std::cout << "浮点数: " << val << std::endl;
-}, v);
-
-[图片]
-6. valueless_by_exception处理机制
-6.1 无效状态的产生与检测
-std::variant 可能在某些情况下变为无效状态，例如在异常导致的部分构造后。这种状态称为"valueless by exception"。
-[图片]
-无效状态的产生
-无效状态主要在以下情况下产生：
-1. 当尝试赋值或替换当前值时发生异常
-2. 当无法保持原有状态且无法完成新状态的构造时
-struct MayThrow {
-    MayThrow() = default;
-    MayThrow(const MayThrow&) { 
-        if (std::rand() % 2) throw std::runtime_error("随机构造失败");
-    }
-};
-
-std::variant<int, MayThrow> v = 10;
-
+```cpp
+// 使用get获取值（不安全，类型错误会抛出异常）
 try {
-    MayThrow m;
-    v = m;  // 可能抛出异常
-} catch (...) {
-    // 此时v可能处于无效状态
-    if (v.valueless_by_exception())
-        std::cout << "v现在无效" << std::endl;
+    std::cout << std::get<int>(v1) << std::endl;        // 按类型访问
+    std::cout << std::get<0>(v1) << std::endl;          // 按索引访问
+} catch (const std::bad_variant_access& e) {
+    std::cerr << "类型访问错误: " << e.what() << std::endl;
 }
 
-无效状态的检测
-std::variant 提供了 valueless_by_exception() 方法来检测无效状态：
-constexpr bool valueless_by_exception() const noexcept
-{ return !this->_M_valid(); }
-
-constexpr bool
-_M_valid() const noexcept
-{
-  if constexpr (__variant::__never_valueless<_Types...>())
-    return true;
-  return this->_M_index != __index_type(variant_npos);
+// 使用get_if安全访问（返回指针，类型错误返回nullptr）
+if (auto pval = std::get_if<std::string>(&v2)) {
+    std::cout << *pval << std::endl;
+} else {
+    std::cout << "v2不包含string" << std::endl;
 }
 
-此外，index() 方法在无效状态下返回特殊值 variant_npos。
-
-6.3 异常安全保证
-std::variant 的 emplace 方法实现了不同级别的异常安全保证：
-template<size_t _Np, typename... _Args>
-_GLIBCXX20_CONSTEXPR
-enable_if_t<is_constructible_v<__to_type<_Np>, _Args...>,
-            __to_type<_Np>&>
-emplace(_Args&&... __args)
-{
-  // ...
-  // 强异常安全保证
-  if constexpr (is_nothrow_constructible_v<type, _Args...>)
-  {
-    __variant::__emplace<_Np>(*this, std::forward<_Args>(__args)...);
-  }
-  else if constexpr (is_scalar_v<type>)
-  {
-    // 标量类型的特殊处理
-    const type __tmp(std::forward<_Args>(__args)...);
-    __variant::__emplace<_Np>(*this, __tmp);
-  }
-  else if constexpr (__variant::_Never_valueless_alt<type>()
-      && _Traits::_S_move_assign)
-  {
-    // 使用临时variant
-    variant __tmp(in_place_index<_Np>,
-                std::forward<_Args>(__args)...);
-    *this = std::move(__tmp);
-  }
-  else
-  {
-    // 基本异常安全保证
-    __variant::__emplace<_Np>(*this, std::forward<_Args>(__args)...);
-  }
-  // ...
+// 检查当前类型
+if (std::holds_alternative<int>(v1)) {
+    std::cout << "v1包含int" << std::endl;
 }
+```
 
-根据类型特性，emplace 方法会选择不同的实现策略：
-1. 对于 nothrow 构造函数，直接在原位构造（强异常安全保证）
-2. 对于标量类型，先构造临时对象再赋值（强异常安全保证）
-3. 对于满足"Never Valueless"条件的类型，使用临时variant（强异常安全保证）
-4. 对于其他类型，提供基本异常安全保证
-5. 性能优化策略
-7.1 内存布局优化
-std::variant 实现了多种内存布局优化：
-索引类型优化
-根据类型数量选择最小的整数类型来存储索引：
-template <typename... _Types>
-using __select_index =
-  typename __select_int::_Select_int_base<sizeof...(_Types),
-                                  unsigned char,
-                                  unsigned short>::type::value_type;
+### 修改
 
-这种优化可以减少variant的内存占用，特别是对于少量类型的情况。
-对齐优化
-std::variant 使用 __aligned_membuf 来确保正确的内存对齐，同时避免不必要的填充：
-template<typename _Type>
-struct _Uninitialized<_Type, false>
-{
-  // ...
-  __gnu_cxx::__aligned_membuf<_Type> _M_storage;
-};
+```cpp
+// 赋值
+v1 = "hello";  // 现在包含std::string
 
-7.2 特殊成员函数优化
-GCC使用 _Traits 类和多层继承来有条件地启用或禁用特殊成员函数：
-template<typename... _Types>
-struct _Traits
-{
-  static constexpr bool _S_default_ctor =
-    is_default_constructible_v<typename _Nth_type<0, _Types...>::type>;
-  static constexpr bool _S_copy_ctor =
-    (is_copy_constructible_v<_Types> && ...);
-  static constexpr bool _S_move_ctor =
-    (is_move_constructible_v<_Types> && ...);
-  // ...
-};
+// 原位构造
+v1.emplace<int>(42);  // 现在包含int(42)
+v1.emplace<0>(42);    // 等效写法
+```
 
-然后使用 _Enable_copy_move 基类来控制特殊成员函数的生成：
-template<typename... _Types>
-class variant
-  : private __detail::__variant::_Variant_base<_Types...>,
-    private _Enable_copy_move<
-      __detail::__variant::_Traits<_Types...>::_S_copy_ctor,
-      __detail::__variant::_Traits<_Types...>::_S_copy_assign,
-      __detail::__variant::_Traits<_Types...>::_S_move_ctor,
-      __detail::__variant::_Traits<_Types...>::_S_move_assign,
-      variant<_Types...>>
-{
-  // ...
-};
+### 通过`overload`辅助类实现类switch-case语义
 
-这种设计确保了特殊成员函数只在所有类型都支持相应操作时才启用，避免了不必要的代码生成。
-7.3 访问性能优化
-std::variant 实现了多种访问性能优化：
-访问器函数优化
-get 和 get_if 函数的实现使用了递归模板来高效访问variant中的值：
-template<size_t _Np, typename _Union>
-constexpr decltype(auto)
-__get_n(_Union&& __u) noexcept
-{
-  if constexpr (_Np == 0)
-    return std::forward<_Union>(__u)._M_first._M_get();
-  else if constexpr (_Np == 1)
-    return std::forward<_Union>(__u)._M_rest._M_first._M_get();
-  else if constexpr (_Np == 2)
-    return std::forward<_Union>(__u)._M_rest._M_rest._M_first._M_get();
-  else
-    return __variant::__get_n<_Np - 3>(
-             std::forward<_Union>(__u)._M_rest._M_rest._M_rest);
-}
+```cpp
+// https://godbolt.org/z/r6a9Y6jxh
+// overloaded辅助类
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>; // C++17指引推导
 
-对于常用的前几个索引，使用直接访问而不是递归，这可以提高性能。
-访问者模式优化
-如前所述，std::visit 对单个variant和少量替代项使用switch-case优化，避免了虚表的开销。
-[图片]
-8. 与其他类似概念的比较
-8.1 与传统union的比较
-[图片]
-std::variant 相比传统的C风格联合体有以下优势：
-1. 类型安全：自动跟踪当前类型，提供类型检查
-2. 支持非POD类型：可以存储具有构造函数、析构函数的类型
-3. 自动析构：正确调用当前持有对象的析构函数
-4. 异常安全：提供异常安全保证
-但也有一些劣势：
-1. 内存开销：需要额外存储类型索引
-2. 性能开销：类型检查和异常处理带来轻微性能损失
-3. 实现复杂度：实现更复杂，可能导致代码膨胀
-8.2 与boost::variant的比较
-[图片]
-std::variant 与 Boost.Variant 的主要区别：
-1. 无值状态：std::variant 支持valueless_by_exception状态，而Boost.Variant保证never-empty
-2. 递归变体：std::variant 不直接支持递归定义，而Boost.Variant通过recursive_wrapper支持
-3. 访问API：std::variant 使用std::visit和std::get，而Boost.Variant使用apply_visitor和get
-4. 引用支持：std::variant 不支持引用类型，而Boost.Variant可通过wrapper支持
-5. 性能：std::variant 通常更优化，但功能相对较少
-8.3 与std::any的比较
-[图片]
-std::variant 与 std::any 的主要区别：
-1. 类型安全：std::variant 限制为预定义类型集，而 std::any 可存储任意类型
-2. 编译期检查：std::variant 提供编译期类型检查，而 std::any 只有运行时检查
-3. 内存模型：std::variant 通常在栈上分配，而 std::any 可能需要堆分配
-4. 性能：std::variant 通常更高效，没有类型擦除开销
-5. 使用场景：std::variant 适用于已知类型集，std::any 适用于完全动态类型
-8.4 与基于继承的多态比较
-[图片]
-std::variant 与基于继承的多态比较：
-1. 类型关系：std::variant 不需要类型之间有继承关系，而多态要求共同基类
-2. 内存模型：std::variant 使用值语义，通常在栈上，而多态通常使用引用语义，在堆上
-3. 扩展性：std::variant 类型集在编译期固定，而多态可在运行时扩展
-4. 性能：std::variant 通常更快，缓存友好，没有虚函数调用开销
-5. 代码复杂度：std::variant 使用模板元编程，而多态使用更熟悉的面向对象设计
-9. 实际应用场景和最佳实践
-9.1 典型应用场景
-std::variant 在以下场景特别有用：
-状态机实现
+// 使用示例
+std::variant<int, std::string> v = "hello";
+std::visit(overloaded {
+    [](int i) { std::cout << "整数: " << i << std::endl; },
+    [](const std::string& s) { std::cout << "字符串: " << s << std::endl; }
+}, v);
+```
+
+### 结合`overload`实现状态机
+
+```cpp
 // 定义状态
 struct Idle {};
 struct Running { int progress; };
@@ -1859,20 +1534,46 @@ public:
         }, state_);
     }
 };
+```
 
-异构容器
-// 可以存储不同类型的集合
-std::vector<std::variant<int, std::string, double>> collection;
-collection.push_back(42);
-collection.push_back("Hello");
-collection.push_back(3.14);
+### 返回统一类型
 
-// 处理所有元素
-for (const auto& item : collection) {
-    std::visit([](const auto& val) { std::cout << val << std::endl; }, item);
+```cpp
+// https://godbolt.org/z/P4bM75jda
+auto result = std::visit([](const auto& val) -> std::string {
+    using std::to_string;
+    if constexpr (std::is_same_v<std::decay_t<decltype(val)>, std::string>)
+        return val;
+    else
+        return to_string(val);
+}, v);
+```
+
+### 多个`variant`组合访问
+
+```cpp
+// https://godbolt.org/z/jnoYszsTb
+#include <variant>
+#include <iostream>
+#include <assert.h>
+
+int main() {
+    std::variant<int, float> v1 = 42;
+    std::variant<std::string, bool> v2 = "hello";
+
+    std::visit([](auto&& a, auto&& b) {
+      std::cout << a << " - " << b << std::endl;
+    }, v1, v2);
+
+    return 0;
 }
 
-函数返回多种类型
+// 42 - hello
+```
+
+### 通过`variant`返回不同类型的值
+
+```cpp
 // 函数可以返回不同类型
 std::variant<std::string, std::vector<int>, std::error_code> 
 parse_input(const std::string& input) {
@@ -1884,72 +1585,19 @@ parse_input(const std::string& input) {
     
     return input; // 返回原始字符串
 }
+```
 
-9.2 使用模式与技巧
-overloaded辅助类
-定义一个辅助类简化访问者定义：
-// overloaded辅助类
-template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
-template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>; // C++17指引推导
+### 利用`variant`实现异构容器
 
-// 使用示例
-std::variant<int, std::string> v = "hello";
-std::visit(overloaded {
-    [](int i) { std::cout << "整数: " << i << std::endl; },
-    [](const std::string& s) { std::cout << "字符串: " << s << std::endl; }
-}, v);
+```cpp
+// 可以存储不同类型的集合
+std::vector<std::variant<int, std::string, double>> collection;
+collection.push_back(42);
+collection.push_back("Hello");
+collection.push_back(3.14);
 
-返回值访问者
-使用访问者返回统一类型：
-auto result = std::visit([](const auto& val) -> std::string {
-    using std::to_string;
-    if constexpr (std::is_same_v<std::decay_t<decltype(val)>, std::string>)
-        return val;
-    else
-        return to_string(val);
-}, v);
-
-多个variant组合访问
-std::variant<int, float> v1 = 42;
-std::variant<std::string, bool> v2 = "hello";
-
-std::visit([](auto&& a, auto&& b) {
-    std::cout << a << " - " << b << std::endl;
-}, v1, v2);
-
-9.3 性能考量与建议
-类型选择建议
-- 限制类型数量：过多类型会增加编译时间和二进制大小
-- 考虑类型大小：variant大小由最大类型决定，避免不必要的大型类型
-- 避免重复类型：不要在同一个variant中包含相同类型
-- 考虑默认构造顺序：将最可能使用的类型放在第一位
-异常安全考量
-- 注意valueless_by_exception状态：在修改variant时处理可能的异常
-- 使用get_if而非get：优先使用返回指针的get_if以避免异常
-- 考虑nothrow保证：如果所有类型都有nothrow移动构造，variant不会进入valueless状态
-编译时影响
-- 模板实例化：每个variant类型组合都会生成新代码
-- 访问者代码膨胀：特别是多个variant的组合访问
-- 内联扩展：许多操作在编译时展开，增加代码大小
-优化建议：
-- 限制variant中的类型数量，通常不超过10种
-- 将复杂variant定义移至实现文件
-- 考虑使用显式模板实例化控制代码膨胀
-- 测量variant在性能关键代码中的实际影响
-10. 参考资料与进一步阅读
-标准文档
-- ISO/IEC 14882:2017 - C++17标准，第23.7节
-- P0088R3 - Variant: a type-safe union for C++17
-实现源码
-- GCC libstdc++ variant实现
-- LLVM libc++ variant实现
-- MSVC STL variant实现
-相关文章与演讲
-- Axel Naumann, "Variants: Past, Present, and Future" (CppCon 2015)
-- Miro Knejp, "Implementing variant Visitation Using Lambdas" (CppCon 2018)
-- Simon Brand, "How to Use C++17 std::variant" (2018)
-- Arthur O'Dwyer, "The Best Type Traits C++ Doesn't Have" (CppCon 2021)
-相关库
-- Boost.Variant
-- Boost.Variant2
-- mpark/variant - C++14兼容的variant实现
+// 处理所有元素
+for (const auto& item : collection) {
+    std::visit([](const auto& val) { std::cout << val << std::endl; }, item);
+}
+```
