@@ -123,7 +123,6 @@
 - Topics: K8s OLAP-Engine
 - 广度：AI-GPT 业界TSDB
 
-
 #### Storage
 
 - <font color=green>[Done]</font> `数据库系统内幕`
