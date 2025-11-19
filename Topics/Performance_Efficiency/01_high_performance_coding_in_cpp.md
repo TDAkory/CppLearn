@@ -1,5 +1,82 @@
 # C++高性能编程
 
+- [C++高性能编程](#c高性能编程)
+  - [2. 基本C++技术](#2-基本c技术)
+    - [`auto`自动类型推到](#auto自动类型推到)
+    - [移动语义](#移动语义)
+    - [设计带有错误处理的接口](#设计带有错误处理的接口)
+    - [函数对象和lambda表达式](#函数对象和lambda表达式)
+  - [3. 分析和测量性能](#3-分析和测量性能)
+  - [4. 数据结构](#4-数据结构)
+  - [5. 算法](#5-算法)
+    - [定义在中的标准算法通常具有如下特性：](#定义在中的标准算法通常具有如下特性)
+      - [算法不会改变容器的大小(Functions from  can only modify the elements in a specified range)。](#算法不会改变容器的大小functions-from--can-only-modify-the-elements-in-a-specified-range)
+      - [带有输出的算法需要预选分配目标容器空间(Algorithms with output require allocated data)](#带有输出的算法需要预选分配目标容器空间algorithms-with-output-require-allocated-data)
+      - [算法默认使用`operator==()`和`operator()<`](#算法默认使用operator和operator)
+      - [受限算法使用投影](#受限算法使用投影)
+      - [算法要求`Move`操作不能抛出异常](#算法要求move操作不能抛出异常)
+      - [算法具有复杂性保证](#算法具有复杂性保证)
+      - [算法的性能与C库函数的等价一样好](#算法的性能与c库函数的等价一样好)
+    - [最佳实践](#最佳实践)
+  - [6. 范围和视图](#6-范围和视图)
+    - [从Ranges库理解视图](#从ranges库理解视图)
+      - [视图是可组合的](#视图是可组合的)
+      - [视图是具有复杂性保证的非拥有范围](#视图是具有复杂性保证的非拥有范围)
+      - [视图不会改变底层容器](#视图不会改变底层容器)
+      - [视图可以实体化为容器](#视图可以实体化为容器)
+      - [视图是延迟计算的（惰性评估）](#视图是延迟计算的惰性评估)
+    - [标准库的视图](#标准库的视图)
+      - [Range views](#range-views)
+      - [重新审视 std::string\_view 和 std::span](#重新审视-stdstring_view-和-stdspan)
+  - [7.内存管理](#7内存管理)
+    - [内存对齐](#内存对齐)
+    - [内存所有权](#内存所有权)
+      - [隐式处理资源](#隐式处理资源)
+    - [小对象优化](#小对象优化)
+    - [自定义内存管理](#自定义内存管理)
+  - [8. 编译时编程](#8-编译时编程)
+    - [模版元编程](#模版元编程)
+    - [类型特征（`<type_traits>`）](#类型特征type_traits)
+    - [常量表达式](#常量表达式)
+    - [`concept`和`requires`](#concept和requires)
+  - [9.基本实用程序](#9基本实用程序)
+    - [`std::optional<T>`](#stdoptionalt)
+    - [固定大小异构集合](#固定大小异构集合)
+    - [动态大小的异构集合](#动态大小的异构集合)
+      - [std::variant 的异常安全性](#stdvariant-的异常安全性)
+      - [访问变体](#访问变体)
+      - [全局函数 `std::get()`](#全局函数-stdget)
+  - [10. 代理对象和延迟评估](#10-代理对象和延迟评估)
+    - [使用代理对象的一些例子](#使用代理对象的一些例子)
+  - [11. 并发](#11-并发)
+    - [并发和并行](#并发和并行)
+      - [共享内存](#共享内存)
+      - [数据竞争](#数据竞争)
+      - [互斥锁和临界区](#互斥锁和临界区)
+      - [死锁](#死锁)
+    - [并发编程](#并发编程)
+      - [C++20中的同步原语](#c20中的同步原语)
+      - [C++中的原子支持](#c中的原子支持)
+      - [内存模型和无锁编程](#内存模型和无锁编程)
+    - [性能指南](#性能指南)
+    - [伪共享](#伪共享)
+  - [12. 协程和惰性生成器（Coroutine \& Lzay Generator）](#12-协程和惰性生成器coroutine--lzay-generator)
+    - [Abstraction](#abstraction)
+    - [有栈协程和无栈协程](#有栈协程和无栈协程)
+      - [Python：`greenlet`库](#pythongreenlet库)
+      - [Lua：`coroutine`库](#luacoroutine库)
+      - [（3）Go：Goroutine（特殊的有栈协程）](#3gogoroutine特殊的有栈协程)
+    - [2. 无栈协程的实践](#2-无栈协程的实践)
+      - [（1）C++20：`std::coroutine`](#1c20stdcoroutine)
+      - [（2）C#：`async/await`](#2casyncawait)
+      - [（3）JavaScript：`async/await`](#3javascriptasyncawait)
+      - [（4）Python：`asyncio`（原生无栈协程）](#4pythonasyncio原生无栈协程)
+    - [如何选择：场景决定类型](#如何选择场景决定类型)
+  - [13. 使用协程进行异步编程](#13-使用协程进行异步编程)
+  - [14. 并行算法](#14-并行算法)
+  - [15. 其他书籍推荐](#15-其他书籍推荐)
+
+
 > [C++ 高性能编程（全）](https://www.cnblogs.com/apachecn/p/18172912)
 > [C++ High Performance, Second Edition: Master the art of optimizing the functioning of your C++ code](https://www.amazon.com/dp/1839216549)
 
@@ -1768,7 +1845,7 @@ static_assert(std::atomic<int>::is_always_lock_free);   // since c++17, compile 
 
 [Thing_about_false_sharing](../../Basic_Concept/Things_About/Things_about_false_sharing.md)
 
-## 协程和惰性生成器（Coroutine & Lzay Generator）
+## 12. 协程和惰性生成器（Coroutine & Lzay Generator）
 
 ### Abstraction
 
@@ -2013,8 +2090,8 @@ print(coroutine.status(co))  -- 输出：dead（结束）
   ```
   - 关键点：与`greenlet`（有栈）不同，`asyncio`协程不能在普通函数中挂起，必须通过`await`显式标记挂起点。
 
+### 如何选择：场景决定类型
 
-## 五、如何选择：场景决定类型
 1. **优先有栈协程的场景**：  
    - 逻辑复杂，需要在嵌套函数中频繁挂起（如游戏AI、状态机）；  
    - 需兼容旧代码，不希望修改函数签名（有栈协程可通过库实现，对代码侵入小）；  
@@ -2025,10 +2102,18 @@ print(coroutine.status(co))  -- 输出：dead（结束）
    - 对内存开销敏感（如百万级协程场景，无栈协程的内存优势明显）；  
    - 语言原生支持（如C#、JavaScript，用无栈协程更符合语言习惯）。  
 
+有栈协程和无栈协程是协程的两种实现范式：
 
-## 六、总结
-有栈协程和无栈协程是协程的两种实现范式：  
 - 有栈协程以“独立栈”换取灵活性，支持任意位置挂起，但内存开销较高；  
 - 无栈协程以“状态机”换取高效性，挂起点受限，但内存更省、切换更快。  
 
 编程语言的选择往往反映了其设计权衡：系统级语言（如C++、Rust）倾向于无栈协程（性能优先），脚本语言（如Python、Lua）则同时支持两种（灵活性与易用性兼顾），而Go的Goroutine则融合了有栈协程的灵活性和动态栈的高效性，成为并发编程的标杆。理解两者的差异，才能在实际开发中选择最合适的协程模型。
+
+## 13. 使用协程进行异步编程
+
+非性能话题，本质上是协程特性的解读
+
+## 14. 并行算法
+
+## 15. 其他书籍推荐
+
