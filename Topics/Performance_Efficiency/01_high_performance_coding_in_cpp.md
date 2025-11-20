@@ -74,6 +74,12 @@
     - [如何选择：场景决定类型](#如何选择场景决定类型)
   - [13. 使用协程进行异步编程](#13-使用协程进行异步编程)
   - [14. 并行算法](#14-并行算法)
+    - [算法并行化的一般思路](#算法并行化的一般思路)
+      - [方案1：循环并行（最常用，适合无依赖循环）](#方案1循环并行最常用适合无依赖循环)
+      - [方案2：分治并行（适合递归算法，如排序、查找）](#方案2分治并行适合递归算法如排序查找)
+      - [方案3：数据并行（适合大规模数据处理，如滤波、统计）](#方案3数据并行适合大规模数据处理如滤波统计)
+      - [并行化避坑指南（常见问题与解决方案）](#并行化避坑指南常见问题与解决方案)
+    - [并行标准库算法](#并行标准库算法)
   - [15. 其他书籍推荐](#15-其他书籍推荐)
 
 
@@ -2115,5 +2121,328 @@ print(coroutine.status(co))  -- 输出：dead（结束）
 
 ## 14. 并行算法
 
-## 15. 其他书籍推荐
+### 算法并行化的一般思路
 
+将普通C++算法并行化的核心是**拆分独立任务+利用多核资源**，但并非所有算法都适合并行化。
+
+并行化存在“ overhead 开销”（线程创建、任务调度、数据同步），只有当“并行加速收益 > 开销”时才值得实施。以下准则可快速判断：
+
+核心准则，Amdahl 定律（并行化上限）：并行加速比 \( S_p \) 满足：  
+\[ S_p = \frac{1}{(1 - f) + \frac{f}{p}} \]  
+- \( f \)：算法中“可并行部分的比例”（如循环体纯计算，无依赖 → \( f≈1 \)）；  
+- \( p \)：CPU核心数（如8核CPU → \( p=8 \)）。  
+- 结论：  
+  - 若 \( f=0.9 \)（90%可并行），8核加速比≈5.7（理论上限）；  
+  - 若 \( f<0.5 \)（仅50%可并行），8核加速比≈1.6（收益有限，不建议并行）。
+
+| 场景                | 适合并行化                          | 不适合并行化                          |
+|---------------------|-------------------------------------|---------------------------------------|
+| 计算/通信比         | 计算密集（如矩阵运算、排序），计算量 > 1ms | IO密集（如文件读写、网络请求），计算量 < 100μs |
+| 任务独立性          | 任务间无依赖（如独立数据块处理）    | 强依赖（如递归依赖、循环依赖）        |
+| 数据规模            | 数据量≥10^4（如数组长度≥1e4）       | 数据量<1e3（并行开销 > 计算收益）      |
+| 同步开销            | 无需同步或轻量同步（如原子操作）    | 频繁同步（如锁竞争严重、全局变量修改）|
+
+工程时间阈值（经验值）
+
+- 单线程执行时间 ≥ 500μs：并行化收益显著（如1ms任务，8核可降至~125μs）；  
+- 单线程执行时间 < 100μs：不建议并行（线程创建+调度开销可能超过100μs）。
+
+C++11及以上提供 `std::thread`、`std::async`、`std::execution`（C++17）等并行工具，以下案例按“实现难度”从低到高排序：
+
+#### 方案1：循环并行（最常用，适合无依赖循环）
+
+- 循环体无数据依赖（如数组元素独立计算、批量处理任务）；  
+- 典型案例：数组平方、向量点积、批量数据过滤。
+
+实现工具：
+
+- C++17+：`std::for_each` + `std::execution::par`（最简单，自动调度线程）；  
+- C++11/14：`std::thread` 手动拆分循环（兼容旧标准）。
+
+数组元素平方（并行化改造）原始串行代码:
+
+```cpp
+#include <vector>
+#include <iostream>
+
+void serialSquare(const std::vector<int>& in, std::vector<int>& out) {
+    for (size_t i = 0; i < in.size(); ++i) {
+        out[i] = in[i] * in[i];  // 无依赖：每个元素独立计算
+    }
+}
+
+int main() {
+    std::vector<int> in(1e6, 2);  // 100万元素，值均为2
+    std::vector<int> out(1e6);
+    serialSquare(in, out);
+    return 0;
+}
+```
+
+并行化改造（C++17+，最简方案）：
+
+```cpp
+#include <vector>
+#include <algorithm>  // std::for_each
+#include <execution>  // std::execution::par
+
+void parallelSquare(const std::vector<int>& in, std::vector<int>& out) {
+    // std::execution::par：并行执行，自动利用多核
+    std::for_each(std::execution::par, in.begin(), in.end(), 
+        [&](int val) {
+            size_t idx = &val - &in[0];  // 计算当前元素索引
+            out[idx] = val * val;
+        }
+    );
+}
+```
+
+并行化改造（C++11/14，兼容旧标准）,手动拆分循环到多个线程，避免线程创建过多（建议线程数=CPU核心数）：
+
+```cpp
+#include <vector>
+#include <thread>
+#include <functional>  // std::bind
+
+void parallelSquareC11(const std::vector<int>& in, std::vector<int>& out) {
+    size_t n = in.size();
+    size_t threadNum = std::thread::hardware_concurrency();  // 获取CPU核心数（如8）
+    std::vector<std::thread> threads;
+
+    auto worker = [&](size_t start, size_t end) {
+        for (size_t i = start; i < end; ++i) {
+            out[i] = in[i] * in[i];
+        }
+    };
+
+    size_t chunkSize = n / threadNum;  // 每个线程处理的元素数
+    for (size_t i = 0; i < threadNum; ++i) {
+        size_t start = i * chunkSize;
+        size_t end = (i == threadNum - 1) ? n : (i + 1) * chunkSize;  // 最后一个线程处理剩余元素
+        threads.emplace_back(worker, start, end);
+    }
+
+    // 等待所有线程完成
+    for (auto& t : threads) {
+        t.join();
+    }
+}
+```
+
+- 避免循环体中修改全局变量（需加锁，导致性能下降）；  
+- 拆分区间时确保无重叠（如每个线程处理独立索引范围）。
+
+#### 方案2：分治并行（适合递归算法，如排序、查找）
+
+- 算法可拆分为“子问题”（子问题独立，无依赖）；  
+- 典型案例：快速排序、归并排序、二分查找（大规模数据）、矩阵乘法。
+
+实现工具：
+
+- `std::async`（自动创建线程，返回`std::future`获取结果）；  
+- 递归拆分+线程池（避免递归创建过多线程）。
+
+并行归并排序（分治并行改造），归并排序的核心是“拆分+合并”：拆分后的子数组可并行排序，最后合并结果。
+
+原始串行归并排序：
+
+```cpp
+#include <vector>
+#include <algorithm>
+
+void merge(std::vector<int>& arr, size_t left, size_t mid, size_t right) {
+    std::vector<int> temp(right - left + 1);
+    size_t i = left, j = mid + 1, k = 0;
+    while (i <= mid && j <= right) {
+        temp[k++] = (arr[i] <= arr[j]) ? arr[i++] : arr[j++];
+    }
+    while (i <= mid) temp[k++] = arr[i++];
+    while (j <= right) temp[k++] = arr[j++];
+    std::copy(temp.begin(), temp.end(), arr.begin() + left);
+}
+
+void serialMergeSort(std::vector<int>& arr, size_t left, size_t right) {
+    if (left >= right) return;
+    size_t mid = left + (right - left) / 2;
+    serialMergeSort(arr, left, mid);    // 左半部分排序
+    serialMergeSort(arr, mid + 1, right);  // 右半部分排序
+    merge(arr, left, mid, right);       // 合并
+}
+```
+
+并行化改造（用`std::async`分治）：
+
+```cpp
+#include <vector>
+#include <algorithm>
+#include <future>  // std::async, std::future
+
+void parallelMergeSort(std::vector<int>& arr, size_t left, size_t right) {
+    const size_t THRESHOLD = 1e4;  // 阈值：子数组长度<1e4时串行（避免小任务并行开销）
+    if (right - left < THRESHOLD) {
+        serialMergeSort(arr, left, right);  // 小数据串行
+        return;
+    }
+
+    size_t mid = left + (right - left) / 2;
+    // 异步执行左半部分排序，返回future（不阻塞当前线程）
+    auto futureLeft = std::async(std::launch::async, 
+        parallelMergeSort, std::ref(arr), left, mid);
+    // 当前线程执行右半部分排序
+    parallelMergeSort(arr, mid + 1, right);
+    // 等待左半部分完成
+    futureLeft.get();
+    // 合并结果
+    merge(arr, left, mid, right);
+}
+```
+
+- 设置“串行阈值”：子问题规模过小时（如<1e4），串行执行比并行更高效；  
+- 避免递归创建过多线程：`std::async`默认使用线程池（C++17后），但旧标准可能创建大量线程，需手动控制线程数。
+
+#### 方案3：数据并行（适合大规模数据处理，如滤波、统计）
+
+- 对大规模数据执行相同操作（如求和、均值、滤波、去重）；  
+- 典型案例：数组求和、图像像素处理、日志统计。
+
+实现工具：
+
+- C++17+：`std::reduce`（并行求和，替代`std::accumulate`）；  
+- 自定义线程池+任务队列（适合高频数据处理）。
+
+并行数组求和（数据并行改造），原始串行代码：
+
+```cpp
+#include <vector>
+#include <numeric>  // std::accumulate
+
+int serialSum(const std::vector<int>& arr) {
+    // 串行求和：O(n)时间，单线程
+    return std::accumulate(arr.begin(), arr.end(), 0);
+}
+```
+
+并行化改造（C++17+，`std::reduce`）：
+
+```cpp
+#include <vector>
+#include <numeric>  // std::reduce
+#include <execution>  // std::execution::par
+
+int parallelSum(const std::vector<int>& arr) {
+    // 并行求和：自动拆分数据到多核，无锁同步
+    return std::reduce(std::execution::par, 
+        arr.begin(), arr.end(), 0);
+}
+```
+
+并行化改造（C++11/14，线程池求和）：自定义简单线程池，避免重复创建线程（适合高频调用场景）：
+
+```cpp
+#include <vector>
+#include <thread>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <functional>
+
+// 简单线程池
+class ThreadPool {
+public:
+    explicit ThreadPool(size_t threadNum) {
+        for (size_t i = 0; i < threadNum; ++i) {
+            threads.emplace_back([this]() {
+                while (true) {
+                    std::function<void()> task;
+                    {
+                        std::unique_lock<std::mutex> lock(mtx);
+                        cv.wait(lock, [this]() { return stop || !tasks.empty(); });
+                        if (stop && tasks.empty()) return;
+                        task = std::move(tasks.front());
+                        tasks.pop();
+                    }
+                    task();
+                }
+            });
+        }
+    }
+
+    ~ThreadPool() {
+        {
+            std::unique_lock<std::mutex> lock(mtx);
+            stop = true;
+        }
+        cv.notify_all();
+        for (auto& t : threads) t.join();
+    }
+
+    template <typename F>
+    void enqueue(F&& f) {
+        {
+            std::unique_lock<std::mutex> lock(mtx);
+            tasks.emplace(std::forward<F>(f));
+        }
+        cv.notify_one();
+    }
+
+private:
+    std::vector<std::thread> threads;
+    std::queue<std::function<void()>> tasks;
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool stop = false;
+};
+
+// 并行求和（基于线程池）
+int parallelSumC11(const std::vector<int>& arr) {
+    size_t n = arr.size();
+    size_t threadNum = std::thread::hardware_concurrency();
+    ThreadPool pool(threadNum);
+    std::vector<int> partialSums(threadNum, 0);  // 每个线程的部分和
+
+    size_t chunkSize = n / threadNum;
+    for (size_t i = 0; i < threadNum; ++i) {
+        size_t start = i * chunkSize;
+        size_t end = (i == threadNum - 1) ? n : (i + 1) * chunkSize;
+        pool.enqueue([&, i, start, end]() {
+            for (size_t j = start; j < end; ++j) {
+                partialSums[i] += arr[j];  // 每个线程计算部分和（无锁，独立数组）
+            }
+        });
+    }
+
+    // 汇总部分和
+    return std::accumulate(partialSums.begin(), partialSums.end(), 0);
+}
+```
+
+- 避免共享变量竞争：如用“部分和数组”（每个线程写独立元素）替代全局变量求和（需加锁）；  
+- 线程池适合高频场景：若仅调用1次，`std::async`更简洁；若频繁调用，线程池可减少线程创建开销。
+
+
+#### 并行化避坑指南（常见问题与解决方案）
+
+| 常见问题                | 解决方案                                  |
+|-------------------------|-------------------------------------------|
+| 锁竞争导致性能下降      | 1. 避免共享变量；2. 用原子操作（`std::atomic`）替代锁；3. 拆分数据到线程本地 |
+| 线程创建过多（资源耗尽）| 1. 线程数=CPU核心数；2. 用线程池；3. 设置串行阈值 |
+| 数据依赖导致结果错误    | 1. 先梳理依赖关系（如循环依赖无法并行）；2. 拆分无依赖任务；3. 用同步机制（如`std::barrier`）控制执行顺序 |
+| 缓存伪共享（False Sharing） | 1. 数据对齐（如每个线程的部分和数组元素按缓存行对齐）；2. 用`std::hardware_destructive_interference_size`（C++17） |
+
+### 并行标准库算法
+
+1. **定义**：`std::execution::execution_policy_tag_t` 是C++17标准库中定义的**空类标签基类**（empty base class），位于`<execution>`头文件，命名空间为`std::execution`。
+2. **核心使命**：作为所有标准执行策略的统一基类，为并行算法提供**执行方式的显式指定接口**，屏蔽底层线程管理细节，同时规范不同执行模式下的行为契约（如线程安全、迭代器兼容性）。
+3. **关键特性**：
+   - 无成员函数或数据成员，仅用于**类型标识**；
+   - 支持`std::is_execution_policy`类型特性判断（用于编译期校验是否为合法执行策略）；
+   - 所有标准执行策略（`seq`/`par`/`unseq` /`par_unseq`）均满足`std::is_execution_policy_v<Policy>`为`true`。
+
+| 执行策略   | 英文全称  | 执行方式  | 迭代器最低要求   | 异常处理方式     | 线程安全特性   | 核心约束与优化支持 | 适用场景 |
+|--------|---------|-------------|-----------|----------|------------|------------|-------------|
+| `std::execution::seq`             | Sequential execution    | 单线程串行执行，严格遵循迭代器顺序        | 前向迭代器（ForwardIterator） | 异常正常传播（抛出后终止算法，无额外行为）                                     | 无多线程开销，仅单线程访问数据，天然无数据竞争                                 | 1. 严格保持迭代顺序；2. 无并行/向量化优化；3. 兼容所有符合前向迭代器的容器 | 小规模数据、强顺序依赖、计算量小（<100μs）、依赖迭代顺序的场景 |
+| `std::execution::par`             | Parallel execution      | 多线程并行执行，同一线程内迭代顺序不变，不跨线程重排 | 双向迭代器（BidirectionalIterator） | 任意线程抛出未捕获异常时，调用 `std::terminate` 终止程序                       | 算法内部保证无数据竞争；用户提供的函数对象若修改共享状态，需手动保证线程安全（原子操作/锁） | 1. 保持线程内迭代顺序，不跨线程重排；2. 支持多线程并行，不支持向量化（SIMD）；3. 兼容双向迭代器及以上容器 | 大规模无依赖数据、需保证线程内迭代顺序、计算密集型（>500μs）、链表等双向迭代器容器场景 |
+| `std::execution::par_unseq`       | Parallel unsequenced execution | 多线程并行执行，允许跨线程重排迭代，支持向量化 | 随机访问迭代器（RandomAccessIterator） | 任意线程抛出未捕获异常时，调用 `std::terminate` 终止程序                       | 算法内部保证无数据竞争；函数对象需支持“并行无序调用”（无副作用、不依赖迭代顺序） | 1. 允许跨线程重排迭代；2. 支持多线程并行+向量化（SIMD）优化；3. 仅兼容随机访问迭代器容器 | 超大规模数据、无顺序依赖、追求极致并行性能（如矩阵运算、数组批量处理） |
+| `std::execution::unseq`           | Unsequenced execution   | 单线程执行，允许向量化（SIMD）优化，不保证迭代顺序(迭代顺序可能被重排以适配向量化指令。) | 随机访问迭代器（RandomAccessIterator） | 异常正常传播（抛出后终止算法，无额外行为）                                     | 单线程内并行（向量化），无多线程数据竞争风险                                   | 1. 单线程内允许重排迭代以适配向量化；2. 支持 SIMD 优化；3. 禁止修改非线程局部状态；4. 仅兼容随机访问迭代器容器 | 单线程场景下追求向量化优化、无顺序依赖的大规模数据处理（如数组滤波、数值计算） |
+
+## 15. 其他书籍推荐
