@@ -80,6 +80,7 @@
       - [方案3：数据并行（适合大规模数据处理，如滤波、统计）](#方案3数据并行适合大规模数据处理如滤波统计)
       - [并行化避坑指南（常见问题与解决方案）](#并行化避坑指南常见问题与解决方案)
     - [并行标准库算法](#并行标准库算法)
+    - [基于索引的for\_each](#基于索引的for_each)
   - [15. 其他书籍推荐](#15-其他书籍推荐)
 
 
@@ -2419,7 +2420,6 @@ int parallelSumC11(const std::vector<int>& arr) {
 - 避免共享变量竞争：如用“部分和数组”（每个线程写独立元素）替代全局变量求和（需加锁）；  
 - 线程池适合高频场景：若仅调用1次，`std::async`更简洁；若频繁调用，线程池可减少线程创建开销。
 
-
 #### 并行化避坑指南（常见问题与解决方案）
 
 | 常见问题                | 解决方案                                  |
@@ -2444,5 +2444,23 @@ int parallelSumC11(const std::vector<int>& arr) {
 | `std::execution::par`             | Parallel execution      | 多线程并行执行，同一线程内迭代顺序不变，不跨线程重排 | 双向迭代器（BidirectionalIterator） | 任意线程抛出未捕获异常时，调用 `std::terminate` 终止程序                       | 算法内部保证无数据竞争；用户提供的函数对象若修改共享状态，需手动保证线程安全（原子操作/锁） | 1. 保持线程内迭代顺序，不跨线程重排；2. 支持多线程并行，不支持向量化（SIMD）；3. 兼容双向迭代器及以上容器 | 大规模无依赖数据、需保证线程内迭代顺序、计算密集型（>500μs）、链表等双向迭代器容器场景 |
 | `std::execution::par_unseq`       | Parallel unsequenced execution | 多线程并行执行，允许跨线程重排迭代，支持向量化 | 随机访问迭代器（RandomAccessIterator） | 任意线程抛出未捕获异常时，调用 `std::terminate` 终止程序                       | 算法内部保证无数据竞争；函数对象需支持“并行无序调用”（无副作用、不依赖迭代顺序） | 1. 允许跨线程重排迭代；2. 支持多线程并行+向量化（SIMD）优化；3. 仅兼容随机访问迭代器容器 | 超大规模数据、无顺序依赖、追求极致并行性能（如矩阵运算、数组批量处理） |
 | `std::execution::unseq`           | Unsequenced execution   | 单线程执行，允许向量化（SIMD）优化，不保证迭代顺序(迭代顺序可能被重排以适配向量化指令。) | 随机访问迭代器（RandomAccessIterator） | 异常正常传播（抛出后终止算法，无额外行为）                                     | 单线程内并行（向量化），无多线程数据竞争风险                                   | 1. 单线程内允许重排迭代以适配向量化；2. 支持 SIMD 优化；3. 禁止修改非线程局部状态；4. 仅兼容随机访问迭代器容器 | 单线程场景下追求向量化优化、无顺序依赖的大规模数据处理（如数组滤波、数值计算） |
+
+### 基于索引的for_each
+
+标准库算法通过在库中包含算法std::for_each()提供了等效于基于范围的for循环。
+
+基于索引的for循环可以通过将标准库算法std::for_each()与范围库中的std::views::iota()结合使用来创建。
+
+```cpp
+template <typename Policy, typename Index, typename F>
+auto parallel_for(Policy&& p, Index first, Index last, F f) {
+  auto r = std::views::iota(first, last);
+  std::for_each(p, r.begin(), r.end(), std::move(f));
+} 
+
+auto v = std::vector<std::string>{"A", "B", "C"};
+parallel_for(std::execution::par, size_t{0}, v.size(),
+              & { v[i] += std::to_string(i + 1); }); 
+```
 
 ## 15. 其他书籍推荐
