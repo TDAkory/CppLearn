@@ -281,3 +281,197 @@ TYPED_TEST_P(MyTestFixture, SomeTest) {
 | `TEST_P()` + `INSTANTIATE_TEST_SUITE_P()` | 值参数化测试 | 不同输入值的测试 |
 
 `INSTANTIATE_TYPED_TEST_SUITE_P` 是 Google Test 类型参数化测试框架的核心，它让编写通用、可重用的模板测试变得简单而强大。
+
+
+# GTest框架核心测试宏详解：从基础到类型参数化
+
+Google Test (GTest) 是C++领域最主流的单元测试框架之一。其核心功能包括丰富的断言系统、分层测试用例管理，以及通过一系列宏实现的自动化测试发现与执行机制。本文旨在系统地解析GTest中最核心的几种测试宏，帮助开发者根据不同的测试场景，选择最合适的工具。
+
+## 一、 核心测试宏概览
+
+| 宏 | 功能描述 | 适用场景 | 核心原理 |
+| :--- | :--- | :--- | :--- |
+| **TEST** | 定义最基础的独立测试用例。 | 简单的独立函数或功能验证，无需共享任何测试资源。 | 宏展开为独立的测试函数并注册到全局测试注册表。 |
+| **TEST_F** | 在测试用例中共享固定测试夹具。 | 多个测试需要相同的初始化和清理逻辑（SetUp/TearDown）。 | 生成继承自指定夹具类的测试类，通过继承共享状态和方法。 |
+| **TEST_P** | 参数化测试，用于同一逻辑的不同输入。 | 需要对多组数据进行重复测试（数据驱动测试）。 | 继承 `::testing::TestWithParam<T>`，运行时通过 `GetParam()` 获取参数。 |
+| **TYPED_TEST** | 针对多种类型进行相同逻辑测试。 | 测试算法或数据结构在不同类型上的一致性（类模板场景）[reference:7]。 | 借助模板元编程和宏拼接，为类型列表中的每个类型生成独立的测试用例。 |
+| **TYPED_TEST_P** | 可扩展的类型参数化测试。 | 需要在不同文件或模块中复用同一套类型化测试逻辑。 | 分两步：先注册一个“测试套件模板”，再通过 `INSTANTIATE_TYPED_TEST_SUITE_P` 用具体类型列表进行实例化。 |
+
+## 二、 基础宏：TEST 与 TEST_F
+
+### 1. TEST：独立的测试单元
+
+`TEST` 是GTest中最基础的宏，用于定义一个无需共享环境的测试用例。测试体可以包含任何C++语句和GTest断言。
+
+```cpp
+#include <gtest/gtest.h>
+
+int Factorial(int n) { /* 实现 */ }
+
+// 测试套件名为 FactorialTest
+TEST(FactorialTest, HandlesZeroInput) {
+  EXPECT_EQ(Factorial(0), 1);
+}
+
+TEST(FactorialTest, HandlesPositiveInput) {
+  EXPECT_EQ(Factorial(1), 1);
+  EXPECT_EQ(Factorial(3), 6);
+}
+```
+
+逻辑上相关的 `TEST` 应该放在同一个测试套件（如 `FactorialTest`）中。
+
+### 2. TEST_F：基于夹具的测试
+
+当多个测试需要共享相同的设置和清理代码时，应使用 `TEST_F`。首先需要创建一个继承自 `::testing::Test` 的夹具类[reference:12]。
+
+```cpp
+#include <gtest/gtest.h>
+#include <queue>
+
+template <typename T> class Queue { /* 实现 */ };
+
+// 1. 定义夹具
+class QueueTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    // 每个测试开始前执行
+    q1_.Enqueue(1);
+    q2_.Enqueue(2); q2_.Enqueue(3);
+  }
+  // void TearDown() override { /* 清理 */ }
+  Queue<int> q0_; // 空队列
+  Queue<int> q1_;
+  Queue<int> q2_;
+};
+
+// 2. 使用 TEST_F 定义测试，第一个参数必须是夹具类名
+TEST_F(QueueTest, IsEmptyInitially) {
+  EXPECT_EQ(q0_.size(), 0);
+}
+
+TEST_F(QueueTest, DequeueWorks) {
+  int* n = q0_.Dequeue();
+  EXPECT_EQ(n, nullptr);
+  n = q1_.Dequeue();
+  ASSERT_NE(n, nullptr); // 若失败，则终止当前函数
+  EXPECT_EQ(*n, 1);
+}
+```
+对于每个 `TEST_F`，框架都会：1）构造全新的夹具对象；2）调用 `SetUp()`；3）运行测试体；4）调用 `TearDown()`；5）析构对象。因此测试之间是隔离的[reference:13][reference:14]。
+
+## 三、 参数化测试宏：TEST_P
+
+`TEST_P` 用于编写数据驱动测试，即用同一段测试逻辑验证多组不同的输入数据[reference:15]。
+
+### 使用流程
+1.  **定义参数化测试夹具**：继承 `::testing::TestWithParam<T>`，其中 `T` 是参数类型[reference:16]。
+2.  **编写测试逻辑**：使用 `TEST_P` 宏，在测试体内通过 `GetParam()` 获取当前测试参数[reference:17]。
+3.  **实例化测试套件**：使用 `INSTANTIATE_TEST_SUITE_P` 宏提供具体的参数列表[reference:18]。
+
+```cpp
+#include <gtest/gtest.h>
+
+bool IsPrime(int n) { /* 判断素数的实现 */ }
+
+// 1. 定义参数化夹具
+class PrimeTest : public ::testing::TestWithParam<int> {};
+
+// 2. 编写参数化测试
+TEST_P(PrimeTest, ReturnsCorrectResult) {
+  int n = GetParam();
+  // 假设只有2,3,5,7,11是素数
+  bool expected = (n == 2 || n == 3 || n == 5 || n == 7 || n == 11);
+  EXPECT_EQ(IsPrime(n), expected);
+}
+
+// 3. 实例化，提供多组参数
+INSTANTIATE_TEST_SUITE_P(
+    PrimeValues,                     // 实例化名称（前缀）
+    PrimeTest,                       // 测试夹具名
+    ::testing::Values(1, 2, 3, 4, 5, 6, 7, 9, 11) // 参数生成器
+);
+```
+GTest提供了多种参数生成器，如 `Values`、`Range`、`Bool`、`Combine` 等，用于灵活生成参数列表[reference:19]。
+
+## 四、 类型参数化测试宏：TYPED_TEST 与 TYPED_TEST_P
+
+当需要测试模板代码或通用算法在多种类型上的行为时，就需要类型参数化测试。
+
+### 1. TYPED_TEST：简单的类型化测试
+`TYPED_TEST` 适用于类型列表固定且测试逻辑定义在同一文件中的场景。
+
+```cpp
+#include <gtest/gtest.h>
+
+template <typename T>
+class ContainerTest : public ::testing::Test {
+ protected:
+  T container_;
+};
+
+// 声明要测试的类型列表
+using MyTypes = ::testing::Types<std::vector<int>, std::list<int>, std::deque<int>>;
+TYPED_TEST_SUITE(ContainerTest, MyTypes); // 关联夹具与类型列表
+
+// 使用 TYPED_TEST 定义测试
+TYPED_TEST(ContainerTest, IsEmptyInitially) {
+  EXPECT_TRUE(this->container_.empty()); // 通过 this-> 访问夹具成员
+}
+```
+`TYPED_TEST` 会为 `MyTypes` 中的**每个类型**生成独立的测试用例[reference:20]。
+
+### 2. TYPED_TEST_P：可复用的类型化测试（高级）
+`TYPED_TEST_P` 提供了更高的灵活性，允许将**测试逻辑的定义**与**类型的实例化**分离，便于在不同模块中复用同一套测试逻辑。
+
+其使用流程分为五个步骤：
+```cpp
+// === 步骤 1 & 2: 定义夹具模板并声明参数化套件 ===
+template <typename T>
+class SmartPointerTest : public ::testing::Test {
+ protected:
+  std::unique_ptr<T> CreateValue(T val) { return std::make_unique<T>(val); }
+};
+TYPED_TEST_SUITE_P(SmartPointerTest); // 声明套件，不绑定具体类型
+
+// === 步骤 3: 用 TYPED_TEST_P 定义测试用例 ===
+TYPED_TEST_P(SmartPointerTest, NotNullAfterCreation) {
+  auto ptr = this->CreateValue(TypeParam{});
+  EXPECT_NE(ptr, nullptr);
+}
+TYPED_TEST_P(SmartPointerTest, HoldsCorrectValue) {
+  auto ptr = this->CreateValue(TypeParam{42});
+  EXPECT_EQ(*ptr, TypeParam{42});
+}
+
+// === 步骤 4: 注册所有测试用例到套件 ===
+REGISTER_TYPED_TEST_SUITE_P(SmartPointerTest,
+    NotNullAfterCreation,
+    HoldsCorrectValue
+);
+
+// === 步骤 5: 实例化套件，绑定具体类型列表 ===
+using PointerTypes = ::testing::Types<int, double, std::string>;
+INSTANTIATE_TYPED_TEST_SUITE_P(CommonTypes,  // 实例化前缀
+                               SmartPointerTest, // 测试夹具模板
+                               PointerTypes); // 要测试的具体类型列表
+```
+最终，GTest会为 `PointerTypes` 中的每个类型，生成所有已注册的测试。例如，会生成 `CommonTypes/SmartPointerTest/0.NotNullAfterCreation`（`int` 类型）等测试实例。
+
+## 五、 总结与最佳实践
+
+| 宏 | 核心价值 | 选择依据 |
+| :--- | :--- | :--- |
+| **TEST** | 简单直接，无状态依赖。 | 测试独立函数，无需 Setup/Teardown。 |
+| **TEST_F** | 共享夹具，避免重复初始化代码。 | 多个测试需要相同的初始状态或资源。 |
+| **TEST_P** | **数据驱动**，一次编写，多数据验证。 | 同一逻辑需要应对多组不同的输入值。 |
+| **TYPED_TEST** | **类型驱动**，为固定类型集生成测试。 | 测试模板代码在已知类型集上的行为。 |
+| **TYPED_TEST_P** | **高度可复用**的类型测试框架。 | 测试逻辑需要被多个不同的类型列表复用。 |
+
+**最佳实践建议**：
+- **合理命名**：为测试套件和实例化前缀起一个有意义的名称，使测试报告更清晰。
+- **避免过度参数化**：不要盲目地将所有测试都参数化，清晰的测试失败信息更重要。
+- **利用条件编译**：可以使用 `#ifdef` 来包含或排除某些特定的类型或参数，适应不同的平台或编译选项。
+- **理解断言区别**：在测试中，通常使用 `EXPECT_XX`（非致命失败），仅在失败后继续执行无意义时使用 `ASSERT_XX`（致命失败）[reference:21]。
+
+通过熟练掌握这五种核心测试宏，开发者可以构建出从简单到复杂、从数据驱动到类型驱动、覆盖全面且易于维护的C++单元测试体系。
