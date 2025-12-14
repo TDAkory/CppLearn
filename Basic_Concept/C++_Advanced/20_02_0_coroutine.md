@@ -4,17 +4,17 @@
   - [Refs](#refs)
   - [Basic Ideas](#basic-ideas)
     - [What does the Coroutines TS give us?](#what-does-the-coroutines-ts-give-us)
-    - [Explain in cppreference](#explain-in-cppreference)
     - [Understanding](#understanding)
       - [什么是协程](#什么是协程)
       - [协程的状态](#协程的状态)
       - [协程的挂起](#协程的挂起)
       - [协程的返回值](#协程的返回值)
-      - [协程体的执行](#协程体的执行)
-      - [协程体的返回值](#协程体的返回值)
       - [协程体抛出异常](#协程体抛出异常)
-  - [`Awaitable` Interface](#awaitable-interface)
+      - [协程体的执行](#协程体的执行)
+  - [Understanding operator `co_await`](#understanding-operator-co_await)
     - [Awaiters and Awaitables: Explaining operator `co_await`](#awaiters-and-awaitables-explaining-operator-co_await)
+    - [Explain in cppreference](#explain-in-cppreference)
+    - [When the compiler sees a `co_await <expr>` expression there are actually a number of possible things it could be translated to depending on the types involved.](#when-the-compiler-sees-a-co_await-expr-expression-there-are-actually-a-number-of-possible-things-it-could-be-translated-to-depending-on-the-types-involved)
     - [Obtaining the Awaiter](#obtaining-the-awaiter)
     - [Awaiting the Awaiter](#awaiting-the-awaiter)
     - [Coroutine Handles](#coroutine-handles)
@@ -79,33 +79,11 @@
 
 协程提案并没有明确规定协程的语义（semantics），而是定义了一个通用的机制，使得库代码可以通过实现符合特定接口的类型，来定制化协程的行为。
 
-提案定义了两类主要的接口：`Promise` `Awaitable`
+**提案定义了两类主要的接口：`Promise` `Awaitable`**
 
 - `Promise`接口定义了定制协程自身行为的方法：库作者可以定制coroutine在 `called`、`return`时的行为，以及协程内`co_await`、`co_yield`表达式的行为（指`await_transform`接口）
 
 - `Awaitable`接口定义了控制`co_await`语义的方法：当一个变量是 `co_await`ed，那么编译器会生成一系列可指定的针对 `awaitable` 变量的方法，这些方法包括：是否挂起当前协程、在挂起后执行某些逻辑、在恢复时执行某些逻辑来处理`co_await`的返回值。
-
-### Explain in cppreference
-
-The unary operator co_await suspends a coroutine and returns control to the caller. Its operand is an expression that either (1) is of **a class type that defines a member operator `co_await`** or may **be passed to a non-member operator `co_await`**, or (2) is **convertible to such a class type by means of the current coroutine's `Promise::await_transform`**.
-
-```cpp
-co_await expr
-```
-
-First, expr is converted to an awaitable as follows:
-
-- if expr is produced by an initial suspend point, a final suspend point, or a yield expression, the awaitable is expr, as-is.
-- otherwise, if the current coroutine's Promise type has the member function await_transform, then the awaitable is promise.await_transform(expr).
-- otherwise, the awaitable is expr, as-is.
-
-Then, the awaiter object is obtained, as follows:
-
-- if overload resolution for operator co_await gives a single best overload, the awaiter is the result of that call:
-  - awaitable.operator co_await() for member overload,
-  - operator co_await(static_cast<Awaitable&&>(awaitable)) for the non-member overload.
-- otherwise, if overload resolution finds no operator co_await, the awaiter is awaitable, as-is.
-- otherwise, if overload resolution is ambiguous, the program is ill-formed.
 
 ### Understanding
 
@@ -190,16 +168,6 @@ struct Result {
 
 promise_type 类型的构造函数参数列表如果与协程的参数列表一致，那么构造 promise_type 时就会调用这个构造函数。否则，就通过默认无参构造函数来构造 promise_type。
 
-#### 协程体的执行
-
-在协程的返回值被创建之后，协程体就要被执行了。
-
-1. 为了便于扩展，协程体执行第一步就是调用 `co_await promise.initial_suspend()`，其返回值是一个awaiter，可以通过这个awaiter来实现协程的调度
-2. 然后执行协程体，协程体当中会存在 co_await、co_yield、co_return 三种协程特有的调用
-3. 当协程执行完成或者抛出异常之后会先清理局部变量，接着调用 final_suspend 来方便开发者自行处理其他资源的销毁逻辑。final_suspend 也可以返回一个等待体使得当前协程挂起，但之后当前协程应当通过 coroutine_handle 的 destroy 函数来直接销毁，而不是 resume。
-
-#### 协程体的返回值
-
 ```cpp
 // 对于返回一个值的情况，需要在 promise_type 当中定义一个函数
 struct Result {
@@ -257,11 +225,21 @@ struct Result {
 };
 ```
 
-## `Awaitable` Interface
+#### 协程体的执行
+
+在协程的返回值被创建之后，协程体就要被执行了。
+
+1. 为了便于扩展，协程体执行第一步就是调用 `co_await promise.initial_suspend()`，其返回值是一个awaiter，可以通过这个awaiter来实现协程的调度
+2. 然后执行协程体，协程体当中会存在 co_await、co_yield、co_return 三种协程特有的调用
+3. 当协程执行完成或者抛出异常之后会先清理局部变量，接着调用 final_suspend 来方便开发者自行处理其他资源的销毁逻辑。final_suspend 也可以返回一个等待体使得当前协程挂起，但之后当前协程应当通过 coroutine_handle 的 destroy 函数来直接销毁，而不是 resume。
+
+## Understanding operator `co_await`
 
 ### Awaiters and Awaitables: Explaining operator `co_await`
 
-- 一元运算符，仅可以在协程上下文内使用（本质上，包含co_await的任意方法，都会被编译为一个协程）(tautology: 同义反复)
+> The `co_await` operator can only be used within the context of a coroutine. This is somewhat of a tautology though, since any function body containing use of the `co_await` operator, by definition, will be compiled as a coroutine.
+
+- 一元运算符，仅可以在协程上下文内使用（**本质上，包含co_await的任意方法，都会被编译为一个协程**）(tautology: 同义反复)
 
 - **支持`co_wait`运算符的类型被称为`Awaitable`**
   - `co_await` 操作符能否应用于某一类型取决于 `co_await` 表达式出现的上下文。`promise` 类型可以通过其 `await_transform` 方法改变例行程序 `co_await` 表达式的含义
@@ -272,6 +250,30 @@ struct Result {
 - **实现了`await_ready`、`await_suspend`、 `await_resume`接口的类型被称为`Awaiter`**
 
 - 一个类型可以同时是`Awaitable`和`Awaiter`
+
+### Explain in cppreference
+
+The unary operator co_await suspends a coroutine and returns control to the caller. Its operand is an expression that either (1) is of **a class type that defines a member operator `co_await`** or may **be passed to a non-member operator `co_await`**, or (2) is **convertible to such a class type by means of the current coroutine's `Promise::await_transform`**.
+
+```cpp
+co_await expr
+```
+
+First, expr is converted to an awaitable as follows:
+
+- if expr is produced by an initial suspend point, a final suspend point, or a yield expression, the awaitable is expr, as-is.
+- otherwise, if the current coroutine's Promise type has the member function await_transform, then the awaitable is promise.await_transform(expr).
+- otherwise, the awaitable is expr, as-is.
+
+Then, the awaiter object is obtained, as follows:
+
+- if overload resolution for operator co_await gives a single best overload, the awaiter is the result of that call:
+  - awaitable.operator co_await() for member overload,
+  - operator co_await(static_cast<Awaitable&&>(awaitable)) for the non-member overload.
+- otherwise, if overload resolution finds no operator co_await, the awaiter is awaitable, as-is.
+- otherwise, if overload resolution is ambiguous, the program is ill-formed.
+
+### When the compiler sees a `co_await <expr>` expression there are actually a number of possible things it could be translated to depending on the types involved.
 
 ### Obtaining the Awaiter
 
@@ -313,17 +315,23 @@ decltype(auto) get_awaiter(Awaitable&& awaitable)
 
 ### Awaiting the Awaiter
 
-assuming we have encapsulated the logic for turning the <expr> result into an Awaiter object into the above functions then the semantics of co_await <expr> can be translated (roughly) as follows:
+假设我们已将 “将 `<expr>` 结果转换为 `Awaiter` 对象” 的逻辑封装到上述函数中，那么 `co_await <expr>` 的语义可（大致）翻译如下:
+
+**对于理解编译器生成逻辑非常关键**
 
 ```cpp
 {
   auto&& value = <expr>;
+  // 获取 Awaitable 对象（可能经过 promise 的 await_transform 转换）
   auto&& awaitable = get_awaitable(promise, static_cast<decltype(value)>(value));
+  // 从 Awaitable 对象获取 Awaiter 对象
   auto&& awaiter = get_awaiter(static_cast<decltype(awaitable)>(awaitable));
-  if (!awaiter.await_ready()) // 如果操作可能同步返回，不需要挂起，name await_ready 可以避免挂起的开销
+  // 检查是否需要挂起协程：await_ready() 返回 false 表示需要挂起
+  if (!awaiter.await_ready()) // 如果操作可能同步返回，不需要挂起，那么 await_ready 可以避免挂起的开销
   {
+    // 定义协程句柄类型（关联当前协程的 promise 类型 P）
     using handle_t = std::experimental::coroutine_handle<P>;
-
+    // 推导 await_suspend() 方法的返回类型
     using await_suspend_result_t =
       decltype(awaiter.await_suspend(handle_t::from_promise(p)));
 
@@ -331,6 +339,7 @@ assuming we have encapsulated the logic for turning the <expr> result into an Aw
 
     // 当前协程在 <suspend-coroutine> 操作完成后，就被认为已经被挂起了。挂起的协程可以恢复、销毁。
 
+    // 处理 await_suspend() 的两种返回类型（void 或 bool）
     if constexpr (std::is_void_v<await_suspend_result_t>)   // 返回 void 的 await_suspend 方法在返回时，无条件得将控制权转移给 caller/resumer
     {
       awaiter.await_suspend(handle_t::from_promise(p));   // 在 await_suspend 内部，是协程被挂起后可以被观察到的位置，await_suspend需要负责在未来某一时刻，将协程恢复或销毁
@@ -338,9 +347,7 @@ assuming we have encapsulated the logic for turning the <expr> result into an Aw
     }
     else
     {
-      static_assert(
-         std::is_same_v<await_suspend_result_t, bool>,
-         "await_suspend() must return 'void' or 'bool'.");
+      static_assert(std::is_same_v<await_suspend_result_t, bool>, "await_suspend() must return 'void' or 'bool'.");
 
       if (awaiter.await_suspend(handle_t::from_promise(p))) // 返回 bool 的 await_suspend 方法则在返回false时，则不经过控制权转移，直接在当前线程上恢复协程
       {
@@ -355,7 +362,13 @@ assuming we have encapsulated the logic for turning the <expr> result into an Aw
 }
 ```
 
-- 如果异常从 await_suspend 中抛出，name协程会立刻自动恢复，异常会传递出 co_await 表达式，跳过对 await_resume 的调用。
+- `await_suspend()` 两种返回类型的差异：返回 `void` 的 `await_suspend()` 调用完成后，会无条件将执行权交还给协程的调用者或恢复者；而返回 `bool` 的版本则允许等待器（`Awaiter`）决定是否立即恢复协程 —— 无需返回给调用者 / 恢复者。返回 `bool` 的版本适用于 “异步操作可能同步完成” 的场景：若操作已同步完成，`await_suspend()` 可返回 `false`，直接恢复协程执行，避免不必要的挂起开销。
+- `<suspend-coroutine>` 阶段的编译器行为，包括：① 记录 `<resume-point>`（协程恢复后需执行的起始位置）；② 将寄存器中暂存的变量值写入协程帧内存（确保挂起期间数据不丢失）。此阶段执行完毕后，协程正式进入 “挂起状态”，首次可被观测到挂起状态的位置是在 `await_suspend()` 函数内部；挂起后，协程可被后续恢复（`resume()`）或销毁（`destroy()`）。
+- `await_suspend()` 的核心职责负责在异步操作完成后，调度协程的恢复（或销毁）。需注意：`await_suspend()` 返回 false 等价于 “调度协程在当前线程立即恢复”。
+- `await_ready()` 的设计目的，若已知异步操作会 “同步完成”（无需挂起协程），可让 `await_ready()` 返回 `true`，直接跳过 `<suspend-coroutine>` 阶段，避免挂起 / 恢复带来的性能开销。
+- `<return-to-caller-or-resumer>` 阶段的行为此阶段会将执行权转移回协程的 “调用者”（首次启动协程的代码）或 “恢复者”（此前唤醒协程的代码），同时弹出当前局部栈帧，但保留协程帧（`coroutine frame`）的存活状态（确保挂起期间数据不被释放）。
+- 协程恢复与 `await_resume()` 的执行逻辑挂起的协程被唤醒后，会从 `<resume-point>` 开始执行，紧接着调用 `await_resume()`：① 该方法的返回值即为 `co_await <expr>` 表达式的最终结果；② 若 `await_resume()` 抛出异常，异常会直接在协程内部传播（中断后续执行）。
+- `await_suspend()` 抛出异常的特殊处理：若 `await_suspend()` 内部抛出异常，协程会被自动唤醒，且异常会直接从 `co_await`表达式抛出 —— 此场景下，`await_resume()` 不会被调用。异常安全提示：`await_suspend()` 应尽量避免抛出异常，若需处理错误，建议通过 `await_resume()` 抛出，确保协程状态一致性。
 
 ### Coroutine Handles
 
@@ -410,7 +423,7 @@ Time     Thread 1                           Thread 2
                                             Load coroutine_handle from operation
                                             Call handle.resume()
                                               <resume-point>
-                                              Call to 8()
+                                              Call to await_resume()
                                               execution continues....
            Call to AsyncFileRead returns
          Call to await_suspend() returns
