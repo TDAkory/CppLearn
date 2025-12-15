@@ -806,15 +806,20 @@ T some_coroutine(P param)
 
 - 协程在完成帧初始化、获取返回值之后，接下来执行的就是 `co_await promise.initial_suspend();`
   - 这里，promise的作者可以控制，协程是直接执行function body，还是先挂起
-    -如果在这里协程被挂起，那么可以通过coroutine_handle的resume来恢复、destroy来销毁
+    - 如果在这里协程被挂起，那么可以通过coroutine_handle的resume来恢复、destroy来销毁
+- co_await promise.initial_suspend() 表达式的结果会被丢弃，因此实现时通常应让该等待器（awaiter）的 await_resume() 方法返回 void
 - 注意该调用点没有try catch保护，意味着异常发生时，协程会被销毁，异常会抛出给调用者
-- 需要确保 return-type 是否包含RAII语义来释放协程帧，防止 double-free
-- 大部分的 initial_suspend 返回 std::experimental::suspend_always 或者 std::experimental::suspend_never，两者都是noexcept awaitable
+- 若携程的返回对象具备 RAII 语义（即销毁返回对象时会顺带销毁协程帧），需特别注意这一点。这种情况下，必须确保 co_await promise.initial_suspend() 是 noexcept 的，以避免协程帧被双重释放（double-free）
+- 大部分的 initial_suspend 返回 `std::experimental::suspend_always` 或者 `std::experimental::suspend_never`，两者都是noexcept awaitable
+
+> 注：目前已有提案调整这一语义 —— 让 co_await promise.initial_suspend() 表达式的全部或部分逻辑归入协程体的 try/catch 块内。因此，在协程特性最终定稿前，此处的精确语义可能会发生变化
 
 ### Returning to the 
 
 - 当协程执行完、或者到 return-to-caller-or-resume 点时，return-object会被返回给协程的调用者
 - return-object 和协程函数的返回值类型不一定一致，必要的情况下，编译器会执行一个隐式转换
+
+> 补充说明：截至 Clang 5.0 版本，其协程实现会延迟执行该转换—— 直到返回对象从协程调用中被返回时才触发；而截至 MSVC 2017 Update 3 版本，其实现会在调用 get_return_object() 后立即执行该转换。尽管《协程技术规范（Coroutines TS）》未明确规定该行为的预期逻辑，但据了解，MSVC 计划调整其实现方式，使其更贴近 Clang 的逻辑 —— 因为这种延迟转换的方式能支持一些有价值的使用场景
 
 ### Returning from the coroutine using `co_return`
 
@@ -823,12 +828,12 @@ T some_coroutine(P param)
 - co_return;
   -> promise.return_void();
 - co_return <expr>;
- -> <expr>; promise.return_void(); if <expr> has type void
- -> promise.return_value(<expr>); if <expr> does not have type void
+  -> <expr>; promise.return_void(); if <expr> has type void
+  -> promise.return_value(<expr>); if <expr> does not have type void
 
-- `goto FinalSuspend` 会释放所有自动存储期的本地变量，释放顺序与构造顺序相反，然后调用 co_await promise.final_suspend()
-- 方法未显式调用 co_return 而执行到尾部时，类似在尾部包含一个 `co_return;`,在这种情况下，如果promise类型未定义 return_void，则会导致UB
-- 此处抛出的异常，会传播到 promise.unhandled_exception()
+- `goto FinalSuspend` 会释放所有自动存储期的本地变量，释放顺序与构造顺序相反，然后调用 `co_await promise.final_suspend()`
+- 协程函数体未显式调用 co_return 而执行到尾部时，类似在尾部包含一个 `co_return;`,在这种情况下，如果promise类型未定义 `return_void`，则会导致UB
+- 若 `<expr>` 的求值过程、或 `promise.return_void()`/`promise.return_value()` 的调用过程抛出异常，该异常仍会传播至 `promise.unhandled_exception()` 方法
 
 ### Handling exceptions that propagate out of the coroutine body
 
@@ -836,15 +841,105 @@ T some_coroutine(P param)
   - 对该方法的典型实现是调用 `std::current_exception()`, 获取异常的copy，之后在别的上下文中抛出
   - 也可以立即重新抛出异常，这会导致协程立即被销毁。这可能会在 coroutine_handle::resume() noexcept 的情况下导致问题，除非你对resume的调用者有完全的掌控
 
+存储异常的一个示例
+
+```cpp
+struct my_promise_type {
+  std::exception_ptr ex_ptr;
+
+  void unhandled_exception() {
+    ex_ptr = std::current_exception();
+  }
+
+  // 示例：在返回对象的await_resume()中重抛异常
+  auto get_return_object() {
+    return my_return_object{coroutine_handle<my_promise_type>::from_promise(*this)};
+  }
+};
+
+struct my_return_object {
+  coroutine_handle<my_promise_type> handle;
+
+  // 调用者co_await时会执行此方法
+  void await_resume() {
+    // 若存在存储的异常，重抛
+    if (handle.promise().ex_ptr) {
+      std::rethrow_exception(handle.promise().ex_ptr);
+    }
+  }
+};
+```
+
+开发建议（避坑指南）
+
+1. **避免在关键Promise方法中抛异常**：不要在`initial_suspend()`、`final_suspend()`、`unhandled_exception()`中抛出异常，直到未来Coroutines规范明确相关行为；
+2. **优先选择存储异常的方式**：通过`std::exception_ptr`存储异常，在调用者上下文重抛，符合协程异步异常处理的最佳实践；
+3. **不要依赖`resume()`的异常传播**：假设`resume()`可能是`noexcept`的，避免让异常从`resume()`中逃逸。
+
 ### The final-suspend point
 
-- 当执行完用户定义的代码时，结果通过 return_void return_value unhandled_exception 返回时，所有的局部变量会被销毁，在将执行权限交还给调用者之前，还可以执行一些逻辑。
-- `co_await promise.final_suspend()`
-  - 这里允许 publishing reautl，signalling completion、resuming a continuation
-  - 或者立即挂起以防止协程执行完，协程帧被销毁
-    - resume一个在该处挂起的协程是UB的，这里仅可以执行destroy
+核心结论：协程的最终挂起点是协程体执行完毕后、协程帧销毁前的关键节点，通过`co_await promise.final_suspend()`实现；该节点支持执行清理、通知等逻辑，且挂起于此的协程仅能调用`destroy()`（调用`resume()`会导致未定义行为）；建议让协程在该节点挂起，以助力编译器优化协程帧的内存分配。
 
-Note that while it is allowed to have a coroutine not suspend at the final_suspend point, it is recommended that you structure your coroutines so that they do suspend at final_suspend where possible. This is because this forces you to call .destroy() on the coroutine from outside of the coroutine (typically from some RAII object destructor) and this makes it much easier for the compiler to determine when the scope of the lifetime of the coroutine-frame is nested inside the caller. This in turn makes it much more likely that the compiler can elide the memory allocation of the coroutine frame.
+协程执行到`final_suspend`前，会完成以下步骤：
+
+1. 退出用户定义的协程体（正常执行完毕或因异常终止）；
+2. 调用`return_void()`/`return_value()`（捕获返回值）或`unhandled_exception()`（捕获异常）；
+3. 按逆序析构协程体内的所有局部变量；
+4. 执行`co_await promise.final_suspend()`，进入最终挂起点逻辑。
+
+该方法返回的Awaitable对象让协程在销毁前拥有额外的执行逻辑空间，常见用途包括：
+
+- **发布结果**：将协程的返回值传递给调用者的等待对象（如`std::future`）；
+- **通知完成**：通过信号量、回调函数等方式告知调用者协程已执行完毕；
+- **恢复续体**：唤醒依赖该协程结果的其他协程；
+- **控制协程帧生命周期**：决定协程是否立即销毁，或挂起后由外部手动销毁。
+
+虽然Coroutines TS允许协程在`final_suspend`处不挂起（如返回`std::suspend_never`），但**推荐让协程在此处挂起**（返回`std::suspend_always`），原因如下：
+
+1. 强制外部（通常是RAII对象的析构函数）调用`destroy()`销毁协程，明确协程帧的生命周期管理；
+2. 帮助编译器判断协程帧的生命周期是否严格嵌套在调用者的生命周期内，从而**触发协程帧的内存分配省略优化**（直接在调用者栈帧中分配，避免堆分配的开销）。
+
+典型的`final_suspend()`实现
+
+```cpp
+#include <coroutine>
+#include <iostream>
+
+struct my_promise_type {
+    auto initial_suspend() {
+        return std::suspend_never{}; // 协程启动后立即执行体
+    }
+
+    auto get_return_object() {
+        return std::coroutine_handle<my_promise_type>::from_promise(*this);
+    }
+
+    void return_void() {}
+
+    void unhandled_exception() {
+        std::terminate(); // 简单处理：终止程序
+    }
+
+    // 最终挂起：返回suspend_always，让协程挂起
+    auto final_suspend() noexcept {
+        struct final_awaiter {
+            bool await_ready() const noexcept { return false; }
+            void await_suspend(std::coroutine_handle<my_promise_type> handle) const noexcept {
+                // 此处可执行完成通知、续体恢复等逻辑
+                std::cout << "Coroutine reached final suspend, ready to be destroyed.\n";
+                // 注意：不要调用handle.resume()，仅能在外部调用destroy()
+            }
+            void await_resume() const noexcept {}
+        };
+        return final_awaiter{};
+    }
+};
+
+// 协程函数：返回coroutine_handle
+std::coroutine_handle<my_promise_type> my_coroutine() {
+    co_return; // 执行完后进入final_suspend
+}
+```
 
 ### How the compiler chooses the promise type
 
