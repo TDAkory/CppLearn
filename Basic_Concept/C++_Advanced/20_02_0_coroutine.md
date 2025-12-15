@@ -372,7 +372,7 @@ decltype(auto) get_awaiter(Awaitable&& awaitable)
 
 ### Coroutine Handles
 
-该类型表示协程框架的非拥有句柄，可用于恢复协程的执行或销毁协程框架。它还可用于访问协程的 Promise 对象。
+该类型表示协程框架的非拥有句柄，可用于恢复协程的执行或销毁协程框架。它还可用于访问协程的 Promise 对象。`Coroutine Handle` 有如下接口：
 
 ```cpp
 namespace std::experimental
@@ -404,11 +404,11 @@ namespace std::experimental
 }
 ```
 
-- Note that you must ensure that the type, P, exactly matches the concrete promise type used for the coroutine frame; attempting to construct a coroutine_handle<Base> when the concrete promise type is Derived can lead to undefined behaviour.
+- Note that you must ensure that the type, P, exactly matches the concrete promise type used for the coroutine frame; attempting to construct a `coroutine_handle<Base>` when the concrete promise type is `Derived` can lead to undefined behaviour.
 
 ## Synchronisation-free async code
 
-co_await 运算符的一个强有力的设计特性，就是允许在协程被挂起和恢复之间，执行其他逻辑
+`co_await` 运算符的一个强有力的设计特性，就是允许在协程被挂起和恢复之间，执行其他逻辑。使 `Awaiter` 对象可安全发起异步操作并传递协程句柄，无需额外线程同步即可在操作完成时恢复协程，本质是利用 “协程已挂起” 的状态保证句柄访问安全性。
 
 ```shell
 Time     Thread 1                           Thread 2
@@ -431,15 +431,33 @@ Time     Thread 1                           Thread 2
 
 ```
 
-- 将handle发布给其他线程之后，那么一个线程可能会在await_suspend()返回之前恢复另一个线程上的协程，并可能与await_suspend() 方法的其余部分同时执行。
-- 协程恢复时要做的第一件事是调用await_resume()来获取结果，然后通常会立即销毁 Awaiter 对象（即await_suspend()调用的this指针）。然后，协程可能会运行完成，并在await_suspend() 返回之前销毁协程和 promise 对象。
-- 因此，在await_suspend()方法中，一旦协程可以在另一个线程上同时恢复，您需要确保避免访问该对象或协程的.promise()对象，因为两者都可能已经被销毁。一般来说，在操作开始并且协程计划恢复后唯一可以安全访问的是 await_suspend() 中的局部变量。
+- 将`handle`发布给其他线程之后，那么一个线程可能会在`await_suspend()`返回之前恢复协程，并可能与`await_suspend()`方法的其余部分同时执行。
+- 协程恢复时要做的第一件事是调用`await_resume()`来获取结果，然后通常会立即销毁 `Awaiter` 对象（即`await_suspend()`调用的`this`指针）。然后，协程可能会运行完成，并在`await_suspend()` 返回之前销毁协程和 `promise` 对象。
+- 因此，在`await_suspend()`方法中，一旦协程可以在另一个线程上同时恢复，您需要确保避免访问该对象或`协程的.promise()`对象，因为两者都可能已经被销毁。一般来说，在操作开始并且协程计划恢复后唯一可以安全访问的是 `await_suspend()` 中的局部变量。
 
 ### Comparison to Stackful Coroutines
 
+核心结论：无栈协程（如C++ Coroutines TS）通过“挂起后、返回前执行逻辑”的特性，在异步场景中无需额外线程同步即可安全发起异步操作；而有栈协程（如Win32 fibers、boost::context）因挂起与上下文切换绑定，需解决竞态问题或承担额外开销，同步成本更高。
+
+- **无栈协程（Coroutines TS）**：
+  - `co_await` 触发的协程挂起与“后续逻辑执行”分离——协程先挂起（`<suspend-point>`），再在 `await_suspend()` 中执行逻辑（如发起异步操作），最后返回调用者/恢复者。挂起与执行逻辑无强制绑定，存在独立窗口期。
+  - 异步操作（如async-file-read）在协程挂起后启动（`await_suspend()` 内），此时协程状态稳定，`coroutine_handle` 可安全传递给异步操作，无竞态风险——异步操作完成后调用 `resume()` 无需线程同步。
+  - 无需额外解决方案——挂起后启动异步操作的特性从设计上规避竞态，无同步开销。
+  - 天然适配异步I/O、定时器等场景，如async-file-read可直接在 `await_suspend()` 中启动，异步完成后无同步恢复协程，性能更优。
+- **有栈协程（Win32 fibers/boost::context）**：
+  - 协程的挂起操作与“另一协程的恢复”被整合为单一“上下文切换”操作，挂起后会立即将执行权转移到目标协程，**无窗口期执行额外逻辑**——无法在当前协程挂起后、执行权转移前启动异步操作。
+  - 需在协程挂起**前**启动异步操作（因挂起后立即切换上下文），可能出现“异步操作在另一线程提前完成，而当前协程尚未完成挂起”的竞态条件，导致 `coroutine_handle` 无效或恢复逻辑冲突，必须通过锁、原子操作等同步机制仲裁。
+  - 存在两种规避方式，但均有成本：
+    - 1. 引入线程同步机制（如互斥锁、条件变量），解决“异步完成”与“协程挂起”的竞态，增加同步开销；
+    - 2. 设计“跳板上下文（trampoline context）”——当前协程挂起后，由跳板上下文代为发起异步操作，但需额外的上下文切换和基础设施，整体开销可能超过同步成本。
+  - 异步适配性较弱，同步机制或额外上下文切换会抵消其优势，更适合“纯协程调度”（如轻量级任务切换），而非需跨线程的异步操作。
+
 ### Avoiding memory allocations
 
-- 当我们使用协程时，我们可以利用协程框架内的局部变量在协程挂起时保持活动状态的事实来避免为操作分配堆存储的需要。
+1. 传统回调API的内存分配痛点：传统方案中，操作状态需通过堆分配（`new`/`malloc`）保证生命周期，多并发操作时需频繁分配/释放；若追求性能，需自定义对象池分配器管理状态对象，增加实现复杂度。
+2. 协程的内存优化核心逻辑：利用“协程挂起时，帧内局部变量仍保持存活”的特性，无需堆分配操作状态------**将每个异步操作的专属状态存储在Awaiter对象中，间接“借用”协程帧的内存**。
+3. Awaiter对象的内存管理流程：`co_await`表达式执行期间，Awaiter对象作为协程帧的一部分存在；异步操作完成后，协程恢复执行，Awaiter对象自动销毁，其占用的协程帧内存可被其他局部变量复用，无手动释放开销。
+4. 协程帧的本质：协程帧本身可能仍通过堆分配，但一次分配后可支撑多个异步操作------相当于“高性能内存池”，编译器在编译时计算所有局部变量所需的总内存大小，运行时零开销分配给局部变量，效率远超自定义分配器。
 
 ### Example
 
