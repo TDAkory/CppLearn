@@ -625,15 +625,16 @@ bool async_manual_reset_event::awaiter::await_suspend(
 
 The `Promise` object defines and controls the behaviour of the coroutine itself by implementing methods that are called at specific points during execution of the coroutine.
 
-当我们书写一个协程方法时，其方法内包含协程的关键字，那么这个函数会被编译器转换为以下的形式。
+`Promise` 对象并非传统意义上与 `std::future` 配对的 `std::promise`，其本质是 “协程状态控制器”—— 定义并控制协程的执行行为，跟踪协程状态，由编译器在协程执行的关键节点自动调用其方法，贯穿协程从创建到销毁的全生命周期。
 
-相比于普通的方法，协程方法在真正执行之前，会有一些特定步骤被调用
+当我们书写一个协程方法时，其方法内包含协程的关键字 `co_await`, `co_yield`, `co_return`，那么这个函数会被编译器转换为以下的形式。
 
 ```cpp
 {
   co_await promise.initial_suspend();
   try
   {
+    // contains one of the coroutine keywords (co_return, co_await, co_yield) 
     <body-statements>
   }
   catch (...)
@@ -645,7 +646,7 @@ FinalSuspend:
 }
 ```
 
-通常会有以下步骤
+相比于普通的方法，协程方法在真正执行之前，会有一些特定步骤被调用。通常会有以下步骤
 
 1. Allocate a coroutine frame using operator new (optional).
 2. Copy any function parameters to the coroutine frame.
@@ -680,9 +681,12 @@ FinalSuspend:
     - 如果协程帧的生命周期严格的小于调用者的生命周期，并且
     - 编译器能够在调用点看到协程帧所需要的大小
   - 标准未定义什么场景下，对 operator new 的省略一定会发生，所以请保持代码的鲁棒性
+  - 若分配失败，默认抛出std::bad_alloc异常；协程函数通常不应声明为noexcept，否则分配失败时会直接调用std::terminate()终止程序。
   - 在不适合使用`exception`的场景下，Promise 也提供了另外的选择，如果定义了一个静态方法 `P::get_return_object_on_allocation_failure()`，name编译器会重载一个 `operator new(size_t, nothrow_t)`，并在该调用返回nullptr的时候立刻调用静态方法，并将结果返回给调用者，而不是直接抛出一个异常
 
 #### Customising coroutine frame memory allocaiton
+
+在 promise 类型中重载operator new和operator delete，编译器会优先调用这些自定义版本，而非全局版本
 
 ```cpp
 struct my_promise_type {
@@ -740,14 +744,23 @@ struct my_promise_type
     allocatorCopy.deallocate(ptr, allocatorOffset + sizeof(ALLOCATOR));
   }
 }
+
+// 为了让协程函数（接收std::allocator_arg_t和分配器参数）关联到对应的my_promise_type<ALLOCATOR>，需特化std::experimental::coroutine_traits
+namespace std::experimental {
+  // 特化coroutine_traits，匹配参数列表：allocator_arg_t + ALLOCATOR + 其他参数
+  template<typename ALLOCATOR, typename... ARGS>
+  struct coroutine_traits<my_return_type, std::allocator_arg_t, ALLOCATOR, ARGS...> {
+    using promise_type = my_promise_type<ALLOCATOR>; // 关联自定义promise类型
+  };
+}
 ```
 
-即便我们定制了协程的内存分配函数，编译器仍然不保证一定会调用该内存分配函数
+**即便我们定制了协程的内存分配函数，编译器仍然可能省略对内存分配的调用**
 
 ### 拷贝参数到协程帧
 
 - 必须拷贝，以保持生命周期合法
-  - passed by value --> copy into 
+  - passed by value --> copy into
   - passed by reference(either lvalue or rvale) --> copy reference into ,not the value they point to 
 - 对于有 trivial destructors 的对象，如果在 <return-to-caller-or-resumer> 之后不存在对该对象的引用，那么编译器可以省略对该对象的copy
 - 在协程场景使用引用传参是比较危险的 ref [Coroutines and Reference Parameters](https://toby-allsopp.github.io/2017/04/22/coroutines-reference-params.html)
@@ -755,14 +768,17 @@ struct my_promise_type
 
 ### Constructing the promise object
 
-- 所有参数被copy到协程帧后，协程会构造promise对象
-- 编译器会检查promise的构造函数重载，如果存在使用copy的参数的，则优先调用，否则会调用默认构造函数
-- 遇到异常则终止
+- 所有参数被copy到协程帧后，协程会构造promise对象。允许 Promise 的构造函数获取拷贝后的参数（通过左值引用），支持基于参数初始化 Promise 状态
+- 编译器会检查promise 中 “能接收所有拷贝后参数左值引用” 的构造函数重载（参数类型、数量需完全匹配），优先调用，否则会调用默认构造函数
+- 遇到异常则终止，会触发栈展开（stack unwinding）：
+  - 先析构协程帧内已拷贝的参数副本；
+  - 释放协程帧占用的内存；
+  - 异常最终传播到协程调用者，协程不会继续执行。
 
 ### Obtaining the return object
 
 - 协程操作promise对象的第一件事，是获取 return-object，promise.get_return_object()。返回对象是协程在第一次挂起或者执行结束时，返回给调用者的对象。
-  - 提前获取的原因是：协程栈帧有可能在开始执行后的某个点，又当前线程或者其他线程销毁；因此滞后获取时不安全的
+  - 提前获取的原因是：协程栈帧有可能在开始执行后的某个点，在当前线程或者其他线程销毁；因此滞后获取是不安全的
 
 ```cpp
 // Pretend there's a compiler-generated structure called 'coroutine_frame'
