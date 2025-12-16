@@ -42,8 +42,9 @@
       - [必须提供 fallback 重载（兼容默认行为）](#必须提供-fallback-重载兼容默认行为)
     - [自定义 co\_yield 的行为](#自定义-co_yield-的行为)
   - [Understanding Symmetric Transfer](#understanding-symmetric-transfer)
-    - [how a task coroutine works](#how-a-task-coroutine-works)
-    - [TODO 一大串没看懂 。。。。。。](#todo-一大串没看懂-)
+    - [假设有如下执行流](#假设有如下执行流)
+    - [Task概要](#task概要)
+    - [完善`Task::promise_type`](#完善taskpromise_type)
 
 ## Refs
 
@@ -1345,9 +1346,30 @@ int main() {
 
 ## Understanding Symmetric Transfer
 
-> “symmetric transfer” which allows you to suspend one coroutine and resume another coroutine without consuming any additional stack-space.
+协程TS的核心魅力在于让异步代码能以同步代码的风格编写——只需在合适位置添加`co_await`，编译器就会自动处理协程挂起、跨挂起点的状态保存，以及异步操作完成后的恢复执行。但最初的协程TS存在一个致命局限：若不谨慎处理，极易引发栈溢出；而若要规避该风险，又需在`task<T>`等类型中引入额外同步开销，牺牲性能。
 
-### how a task coroutine works
+原始协程TS的栈溢出问题：为何会发生？要理解栈溢出的根源，需先明确协程“恢复”操作的默认行为：当通过`coroutine_handle::resume()`恢复一个协程时，该协程会在**当前调用者的栈帧上**继续执行。这种“嵌套式恢复”在复杂异步场景中会导致栈帧不断累积，最终超出栈空间限制。
+
+假设存在三个异步任务`A`、`B`、`C`，其中`A`的完成依赖`B`，`B`的完成依赖`C`，且均通过`co_await`串联：
+
+1. 主线程调用`A()`，协程`A`挂起（等待`B`完成），主线程栈帧仅包含`A`的初始调用；
+2. `C`执行完毕后，回调中调用`B`的`resume()`——`B`在`C`的回调栈帧上恢复执行；
+3. `B`执行完毕后，又在自身栈帧上调用`A`的`resume()`——`A`在`B`的栈帧上继续执行；
+4. 若任务链更长（如1000个嵌套任务），每个恢复操作都会在当前栈帧上叠加新的协程执行栈，最终导致栈溢出。
+
+原始协程TS中，“恢复协程”是一个**同步嵌套调用**：恢复操作的栈帧会嵌套在当前执行流的栈帧中，任务链越长，栈帧层级越深，直至超出进程的栈大小限制（通常为几MB）。
+
+2018年新增的“对称转移”能力，通过修改协程挂起与恢复的底层逻辑，从根源上解决了栈溢出问题，且无需额外同步开销。
+
+对称转移的核心是：当一个协程（如`C`）执行`co_await`挂起时，可直接指定另一个协程（如`B`）作为“接续执行”的目标。此时，编译器会执行以下操作：
+
+1. 保存当前协程（`C`）的挂起状态（寄存器、局部变量等）；
+2. 释放`C`的栈帧空间（无需等待当前调用链返回）；
+3. 直接加载目标协程（`B`）的状态，在原栈空间上恢复执行。
+
+整个过程中，栈帧不会累积——挂起一个协程的同时释放其栈空间，恢复另一个协程时复用该栈空间，本质是“栈帧的原子切换”，而非嵌套叠加。
+
+### 假设有如下执行流
 
 ```cpp
 task foo() {
@@ -1359,100 +1381,94 @@ task bar() {
 }
 ```
 
-Let’s unpack what’s happening here when `bar()` evaluates `co_await foo()`:
+整个流程的核心是协程的惰性执行：foo()协程的实际逻辑仅在被await时触发，而非调用时
 
-- The bar() coroutine calls the foo() function. Note that from the caller’s perspective a coroutine is just an ordinary function.
-- The invocation of foo() performs a few steps:
-  - Allocates storage for a coroutine frame (typically on the heap)
-  - Copies parameters into the coroutine frame (in this case there are no parameters so this is a no-op).
-  - Constructs the promise object in the coroutine frame
-  - Calls promise.get_return_object() to get the return-value for foo(). This produces the task object that will be returned, initialising it with a std::coroutine_handle that refers to the coroutine frame that was just created.
-  - Suspends execution of the coroutine at the initial-suspend point (ie. the open curly brace)
-  - Returns the task object back to bar().
-- Next the bar() coroutine evaluates the co_await expression on the task returned from foo().
-  - The bar() coroutine suspends and then calls the await_suspend() method on the returned task, passing it the std::coroutine_handle that refers to bar()’s coroutine frame.
-  - The await_suspend() method then stores bar()’s std::coroutine_handle in foo()’s promise object and then resumes the foo() coroutine by calling .resume() on foo()’s std::coroutine_handle.
-- The foo() coroutine executes and runs to completion synchronously.
-- The foo() coroutine suspends at the final-suspend point (ie. the closing curly brace) and then resumes the coroutine identified by the std::coroutine_handle that was stored in its promise object before it was started. ie. bar()’s coroutine.
-- The bar() coroutine resumes and continues executing and eventually reaches the end of the statement containing the co_await expression at which point it calls the destructor of the temporary task object returned from foo().
-- The task destructor then calls the .destroy() method on foo()’s coroutine handle which then destroys the coroutine frame along with the promise object and copies of any arguments.
+```mermaid
+sequenceDiagram
+    participant bar_coro as bar() 协程
+    participant foo_coro as foo() 协程
+    participant foo_task as foo()返回的task对象
+    participant foo_promise as foo()的promise对象
+    participant foo_handle as foo()的coroutine_handle
+    participant bar_handle as bar()的coroutine_handle
+
+    Note over bar_coro: 开始执行bar()协程，遇到co_await foo()
+    bar_coro->>foo_coro: 调用foo()函数（协程入口）
+
+    Note over foo_coro: foo()协程初始化阶段
+    foo_coro->>foo_coro: 1. 分配协程帧（堆上）
+    foo_coro->>foo_coro: 2. 构造foo_promise（无参数拷贝）
+    foo_coro->>foo_promise: 3. 调用get_return_object()
+    foo_promise->>foo_task: 生成foo_task（绑定foo_handle）
+    foo_coro->>foo_coro: 4. 触发初始挂起（initial-suspend）
+    foo_coro->>bar_coro: 返回foo_task给bar()协程
+
+    Note over bar_coro: bar()协程处理co_await foo_task
+    bar_coro->>bar_coro: 1. bar()协程挂起
+    bar_coro->>foo_task: 2. 调用await_suspend(bar_handle)
+    foo_task->>foo_promise: 存储bar_handle到foo_promise中
+    foo_task->>foo_handle: 调用foo_handle.resume()（恢复foo协程）
+
+    Note over foo_coro: foo()协程执行阶段
+    foo_coro->>foo_coro: 执行至co_return（同步完成）
+    foo_coro->>foo_coro: 触发最终挂起（final-suspend）
+    foo_coro->>bar_handle: 调用bar_handle.resume()（恢复bar协程）
+
+    Note over bar_coro: bar()协程恢复执行阶段
+    bar_handle->>bar_coro: 恢复bar()协程执行
+    bar_coro->>bar_coro: 执行co_await后续逻辑
+    bar_coro->>foo_task: foo_task临时对象析构
+    foo_task->>foo_handle: 调用foo_handle.destroy()
+    foo_handle->>foo_coro: 销毁foo()协程帧+foo_promise
+
+    Note over bar_coro: bar()协程继续执行至结束
+```
+
+1. 惰性执行的触发点：foo()协程在被调用时仅完成初始化和初始挂起，并未执行实际逻辑；只有当bar()协程对foo_task执行await_suspend时，才通过foo_handle.resume()触发foo()的实际执行。
+2. 协程句柄的核心作用：foo_handle用于控制foo()协程的恢复 / 销毁，bar_handle用于在foo()完成后恢复bar()，是协程间协作的核心载体。
+3. 资源清理时机：foo()的协程帧和 promise 对象不会在foo()完成后立即销毁，而是等到foo_task临时对象析构时，通过foo_handle.destroy()完成清理，避免资源泄漏。
+
+### Task概要
+
+在上面例子中，协程的返回值是Task，那么这个Task应有如下定义：
 
 ```cpp
 class task {
-  public:
-    class promise_type {
-      public:
-        task get_return_object() noexcept {
-          return task{std::coroutine_handle<promise_type>::from_promise(*this)};
-        }
+public:
+  class promise_type { /* see below */ };
 
-        //  we want the coroutine to initially suspend at the open curly brace so that we can later resume the coroutine from this point when the returned task is awaited.
-        // 1. 可以提前获取到对应的 coroutine_handle，防止由此带来的潜在竞争和同步开销
-        // 2. 可以放心的由 task 的析构释放协程帧，不需要担心协程是否由其他线程已经执行完成而造成二次释放。同时利于编译器优化
-        // 3. 增加了异常安全，如果调用者没有选择立刻 co_await returned_task, 而是执行了一些其他逻辑并出现了异常，这时可以放心地释放协程帧（因为我们知道其尚未执行），省去了很多麻烦的考虑（detaching、dangling reference、block in destructor、terminate、UB）
-        std::suspend_always initial_suspend() noexcept { return {}; }
+  task(task&& t) noexcept
+  : coro_(std::exchange(t.coro_, {}))
+  {}
 
-        // This method doesn’t actually need to do anything, it just needs to exist so that the compiler knows that co_return; is valid within this coroutine type.
-        void return_void() noexcept {}
+  ~task() {
+    if (coro_)
+      coro_.destroy();
+  }
 
-        // called if an exception escapes the body of the coroutine.
-        void unhandled_exception() noexcept {
-          std::terminate();
-        }
+  class awaiter { /* see below */ };
 
-        // when the coroutine execution reaches the closing curly brace, we want the coroutine to suspend at the final-suspend point and then resume its continuation. ie. the coroutine that is awaiting the completion of this coroutine.
-        // 1. 将调用者恢复执行的动作延迟到当前协程挂起之后，是因为调用者可能会立即调用task.destructor释放协程帧，但对协程帧的释放，只有在协程挂起的状态下才是合法的，否则可能导致UB
-        // 2. It’s important to note that the coroutine is not yet in a suspended state when the final_suspend() method is invoked. We need to wait until the await_suspend() method on the returned awaitable is called before the coroutine is suspended.
-        struct final_awaiter {
-          bool await_ready() noexcept { return false; }
+  awaiter operator co_await() && noexcept;
 
-          void await_suspend(std::coroutine_handle<promise_type> h) noexcept {
-            h.promise().continuation.resume();
-          }
+private:
+  explicit task(std::coroutine_handle<promise_type> h) noexcept
+  : coro_(h)
+  {}
 
-          void await_resume() noexcept {}
-        };
-
-        final_awaiter final_suspend() noexcept { return {}; }
-
-        std::coroutine_handle<> continuation;
-    };
-
-    task(task &&t) noexcept : coro_(std::exchange(t,coro, {})) {}
-
-    ~task() {   // RAII ensure
-      if (coro_)
-        coro_.destroy();
-    }
-
-    class awaiter {
-      public:
-        bool await_ready() noexcept { return false; }
-
-        void await_suspend(std::coroutine_handle<> continuation) noexcept {
-          // Store the continuation in the task's promise so that the final_suspend()
-          // knows to resume this coroutine when the task completes.
-          coro_.promise().continuation = continuation;
-          // Then we resume the task's coroutine, which is currently suspended
-          // at the initial-suspend-point (ie. at the open curly brace).
-          coro_.resume();
-        }
-
-        void await_resume() noexcept {}
-
-      private:
-        explicit awaiter(std::coroutine_handle<task::promise_type> h) noexcept : coro_(h) {}
-
-        std::coroutine_handle<task::promise_type> coro_;
-    };
-
-    awaiter operator co_await() && noexcept { return awaiter{coro_}; }
-
-  private:
-    explicit task(std::coroutine_handle<promise_type> h) noexcept : coro_(h) {}
-
-    std::coroutine_handle<promise_type> coro_;
+  std::coroutine_handle<promise_type> coro_;
 };
 ```
 
-### TODO 一大串没看懂 。。。。。。
+- 获取资源：task对象在创建时（由promise_type::get_return_object()生成），获取协程帧的句柄（资源）。
+- 释放资源：task对象在析构时（超出作用域、被销毁），自动调用句柄的.destroy()方法，释放协程帧（堆上分配的内存、promise 对象、参数拷贝等）。
+
+### 完善`Task::promise_type`
+
+```cpp
+class task::promise_type {
+public:
+  task get_return_object() noexcept {
+    return task{std::coroutine_handle<promise_type>::from_promise(*this)};
+  }
+}
+```
