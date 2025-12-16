@@ -29,13 +29,17 @@
     - [Constructing the promise object](#constructing-the-promise-object)
     - [Obtaining the return object](#obtaining-the-return-object)
     - [The initial-suspend point](#the-initial-suspend-point)
-    - [Returning to the](#returning-to-the)
+    - [Returning to the caller](#returning-to-the-caller)
     - [Returning from the coroutine using `co_return`](#returning-from-the-coroutine-using-co_return)
     - [Handling exceptions that propagate out of the coroutine body](#handling-exceptions-that-propagate-out-of-the-coroutine-body)
     - [The final-suspend point](#the-final-suspend-point)
     - [How the compiler chooses the promise type](#how-the-compiler-chooses-the-promise-type)
     - [Identifying a specific cotoutine activation frame](#identifying-a-specific-cotoutine-activation-frame)
     - [自定义 co\_await 的行为](#自定义-co_await-的行为)
+      - [用途一：启用非可等待类型的 `co_await` 支持](#用途一启用非可等待类型的-co_await-支持)
+      - [用途二：禁用特定类型的 `co_await`](#用途二禁用特定类型的-co_await)
+      - [用途三：适配已有可等待类型的行为](#用途三适配已有可等待类型的行为)
+      - [必须提供 fallback 重载（兼容默认行为）](#必须提供-fallback-重载兼容默认行为)
     - [自定义 co\_yield 的行为](#自定义-co_yield-的行为)
   - [Understanding Symmetric Transfer](#understanding-symmetric-transfer)
     - [how a task coroutine works](#how-a-task-coroutine-works)
@@ -814,7 +818,7 @@ T some_coroutine(P param)
 
 > 注：目前已有提案调整这一语义 —— 让 co_await promise.initial_suspend() 表达式的全部或部分逻辑归入协程体的 try/catch 块内。因此，在协程特性最终定稿前，此处的精确语义可能会发生变化
 
-### Returning to the 
+### Returning to the caller
 
 - 当协程执行完、或者到 return-to-caller-or-resume 点时，return-object会被返回给协程的调用者
 - return-object 和协程函数的返回值类型不一定一致，必要的情况下，编译器会执行一个隐式转换
@@ -970,7 +974,7 @@ typename coroutine_traits<task<void>, const my_class&, int>::promise_type;
 typename coroutine_traits<task<foo>, my_class&&>::promise_type;
 ```
 
-coroutine_traits 的默认实现是嵌套获取用户定义的 promise_type
+`coroutine_traits` 的默认实现是获取返回值中定义的嵌套 `promise_type`
 
 ```cpp
 namespace std::experimental
@@ -983,7 +987,7 @@ namespace std::experimental
 }
 ```
 
-如果你无法修改协程函数的返回值来定义其promise_type，那么你也可以重载一个coroutine_traits实现
+如果你无法修改协程函数的返回值来定义其`promise_type`，那么你也可以重载一个`coroutine_traits`实现
 
 ```cpp
 namespace std::experimental
@@ -998,11 +1002,12 @@ namespace std::experimental
 
 ### Identifying a specific cotoutine activation frame
 
-当一个协程方法被调用的时候，一个协程帧会被创建。那么如何保存对这个协程帧的引用呢？提案给出的方式是通过 `coroutine_handle` 类型，其接口定义可以类比如下：
+当一个协程方法被调用的时候，一个协程帧会被创建。那么如何保存对这个协程帧的引用呢（以便未来resume或者destroy）？提案给出的方式是通过 `coroutine_handle` 类型，其接口定义可以类比如下：
 
 ```cpp
 namespace std::experimental
 {
+  // 可引用任意类型的协程，支持通用操作，但无法访问协程的 Promise 对象。
   template<typename Promise = void>
   struct coroutine_handle;
 
@@ -1051,19 +1056,292 @@ namespace std::experimental
 - 可以通过以下两种方式获取handle
   - 在`co_await`表达式中作为参数被传递给 `await_suspend()`
   - 若持有`promise`，则可以重新构造出handle `coroutine_hande<Promise>::from_promise()`
-- coroutine_handle 不是一个 RAII 类型
+
+关键使用注意事项
+
+1. **非RAII类型，必须手动销毁**：`coroutine_handle` 不具备自动资源管理能力，若不调用 `destroy()`，协程帧会一直占用内存，导致内存泄漏；调用 `destroy()` 会触发协程帧销毁、Promise对象析构及内存释放。
+2. **`done()` 方法的使用限制**：仅当协程当前处于挂起状态时，调用 `done()` 才有效；若协程正在执行或已销毁，调用 `done()` 为未定义行为。
+3. **类型匹配要求**：`coroutine_handle<Promise>` 的模板参数必须与协程的Promise类型精确匹配，不可用基类Promise类型适配派生类协程帧。
+4. **避免空句柄操作**：对空句柄（`address() == nullptr`）调用 `resume()` 或 `destroy()`，会导致未定义行为，需先通过 `operator bool()` 检查句柄有效性。
+5. **推荐高层RAII封装**：直接使用 `coroutine_handle` 易遗漏 `destroy()`，建议使用cppcoro等库提供的RAII类型，或自定义封装类（在析构函数中调用 `destroy()`）。
 
 ### 自定义 co_await 的行为
 
-通过定义 `Promise::await_transform()` 方法，编译器会自动将每个 `co_await <expr>` 转换为 `co_await promise.await_transform(<expr>)` 。
+核心结论：通过在 promise 类型中定义 `await_transform()` 方法，可全局定制协程体内所有 `co_await` 表达式的行为----编译器会自动将 `co_await <expr>` 转换为 `co_await promise.await_transform(<expr>)`，支持启用非可等待类型、禁用特定类型、适配可等待类型行为三大核心场景，且需提供 fallback 重载以兼容默认 `co_await` 逻辑。
 
-- lets you enable awaiting types that would not normally be awaitable.
-- lets you disallow awaiting on certain types by declaring await_transform overloads as deleted.
-- lets you adapt and change the behaviour of normally awaitable values
+- **触发条件**：只要 promise 类型定义了任意版本的 `await_transform()`，编译器就会对协程体内所有 `co_await` 表达式执行转换。
+- **核心目的**：拦截 `co_await` 的参数（`<expr>`），通过自定义逻辑返回新的 Awaitable 对象，从而改变 `co_await` 的执行行为（如是否挂起、恢复时机、返回值处理等）。
+- **类型兼容性**：`await_transform()` 支持模板重载，可根据 `<expr>` 的类型（如 `std::optional<U>`、自定义 Awaitable 等）提供不同实现，实现精细化定制。
+
+#### 用途一：启用非可等待类型的 `co_await` 支持
+
+针对原本不满足 Awaitable 接口（无 `await_ready()`/`await_suspend()`/`await_resume()`）的类型，通过 `await_transform()` 包装为合法 Awaitable，使其可被 `co_await`。
+
+**示例：让 `std::optional<U>` 支持 `co_await`**
+
+```cpp
+template<typename T>
+class optional_promise {
+public:
+  // 重载：接收 std::optional<U>，返回自定义 Awaitable
+  template<typename U>
+  auto await_transform(std::optional<U>& value) noexcept {
+    class optional_awaiter {
+      std::optional<U>& opt; // 引用原 optional 对象
+    public:
+      explicit optional_awaiter(std::optional<U>& x) noexcept : opt(x) {}
+      
+      // 有值则无需挂起，无值则挂起
+      bool await_ready() noexcept { return opt.has_value(); }
+      
+      // 挂起时无需额外操作（仅等待 optional 被赋值）
+      void await_suspend(std::experimental::coroutine_handle<>) noexcept {}
+      
+      // 恢复时返回 optional 内的值（需确保已赋值）
+      U& await_resume() noexcept { return *opt; }
+    };
+    return optional_awaiter{value};
+  }
+
+  // 其他 promise 必要方法（如 initial_suspend()、get_return_object() 等）
+  auto initial_suspend() noexcept { return std::experimental::suspend_never{}; }
+  std::optional<T> get_return_object() noexcept { return std::nullopt; }
+  void return_value(T value) noexcept { /* 存储返回值 */ }
+};
+```
+
+**效果**：`co_await std::optional<int>{5}` 直接返回 5；`co_await std::optional<int>{std::nullopt}` 会挂起协程，直到 optional 被赋值后恢复。
+
+#### 用途二：禁用特定类型的 `co_await`
+
+通过将特定类型的 `await_transform()` 重载声明为 `delete`，禁止协程体内对该类型使用 `co_await`，编译时直接报错。
+
+**示例：禁用协程内所有 `co_await`（如 `std::generator<T>` 协程）**
+
+```cpp
+template<typename T>
+class generator_promise {
+public:
+  // 模板重载：接收任意类型，直接 delete，禁用所有 co_await
+  template<typename U>
+  std::experimental::suspend_never await_transform(U&&) = delete;
+
+  // 其他 promise 必要方法（适配 generator 逻辑）
+  auto initial_suspend() noexcept { return std::experimental::suspend_always{}; }
+  std::experimental::coroutine_handle<generator_promise> get_return_object() noexcept {
+    return std::experimental::coroutine_handle<generator_promise>::from_promise(*this);
+  }
+  void return_void() noexcept {}
+  auto final_suspend() noexcept { return std::experimental::suspend_always{}; }
+};
+```
+
+**效果**：协程体内若写 `co_await some_value`，编译时会因匹配到 deleted 重载而报错，强制协程为“纯生成器”，不支持异步等待。
+
+#### 用途三：适配已有可等待类型的行为
+
+对原本支持 `co_await` 的类型，通过 `await_transform()` 包装，修改其执行逻辑（如指定恢复时的执行器、添加日志、超时控制等）。
+
+**示例：强制 `co_await` 恢复时在指定执行器（Executor）上运行**
+
+```cpp
+template<typename T, typename Executor>
+class executor_task_promise {
+  Executor executor; // 关联的执行器（如线程池、IO 线程）
+public:
+  explicit executor_task_promise(Executor exec) noexcept : executor(exec) {}
+
+  // 重载：包装任意 Awaitable，指定恢复时的执行器
+  template<typename Awaitable>
+  auto await_transform(Awaitable&& awaitable) {
+    // 假设 cppcoro::resume_on 可指定执行器
+    return cppcoro::resume_on(executor, std::forward<Awaitable>(awaitable));
+  }
+
+  // 其他 promise 必要方法
+  auto initial_suspend() noexcept { return std::experimental::suspend_never{}; }
+  // ...（get_return_object()、return_value() 等）
+};
+```
+
+**效果**：无论 `co_await` 的是何种 Awaitable（如异步 IO、定时器），其恢复后的代码都会在 `executor` 对应的执行上下文（如指定线程池）中运行，保证执行器一致性。
+
+#### 必须提供 fallback 重载（兼容默认行为）
+
+若 promise 定义了 `await_transform()`，**所有 `co_await` 都会被转换**，包括原本支持 `co_await` 的类型（如 `std::future<T>`）。若需保留这些类型的默认行为，必须提供“转发型”fallback 重载：
+
+```cpp
+// fallback 重载：转发所有未匹配的类型，保持默认 co_await 行为
+template<typename Awaitable>
+auto await_transform(Awaitable&& awaitable) {
+  return std::forward<Awaitable>(awaitable); // 直接返回原 Awaitable
+}
+```
+
+**缺失后果**：原本可 `co_await` 的类型会因无匹配重载而编译失败。
 
 ### 自定义 co_yield 的行为
 
-If the co_yield keyword appears in a coroutine then the compiler translates the expression `co_yield <expr>` into the expression `co_await promise.yield_value(<expr>)`. 
+co_yield 的行为需通过协程的 promise 类型显式定义 yield_value() 方法实现自定义 —— 编译器会自动将 co_yield <expr> 转换为 co_await promise.yield_value(<expr>)；该特性为 “主动启用（opt-in）”，promise 类型未定义 yield_value() 则不支持 co_yield，无默认行为。
+
+```cpp
+template<typename T>
+class generator_promise
+{
+  T* valuePtr;
+public:
+  ...
+
+  std::experimental::suspend_always yield_value(T& value) noexcept
+  {
+    // Stash the address of the yielded value and then return an awaitable
+    // that will cause the coroutine to suspend at the co_yield expression.
+    // Execution will then return from the call to coroutine_handle<>::resume()
+    // inside either generator<T>::begin() or generator<T>::iterator::operator++().
+    valuePtr = std::addressof(value);
+    return {};
+  }
+};
+```
+
+co_yield 最常用场景是实现生成器（generator<T>），通过反复产出值并挂起，实现迭代器访问
+
+```cpp
+#include <coroutine>
+#include <experimental/coroutine>
+#include <cassert>
+
+template<typename T>
+class generator; // 前向声明
+
+// generator 对应的 promise 类型
+template<typename T>
+class generator_promise {
+  T* value_ptr = nullptr; // 存储产出值的指针（避免拷贝）
+  // 协程句柄，用于调用者恢复协程
+  std::experimental::coroutine_handle<generator_promise<T>> self;
+
+public:
+  // 1. 必要的 promise 基础方法（适配 generator 逻辑）
+  auto initial_suspend() noexcept {
+    return std::experimental::suspend_always{}; // 启动即挂起，等待迭代器触发
+  }
+
+  auto final_suspend() noexcept {
+    return std::experimental::suspend_always{}; // 最终挂起，由 generator 析构时销毁
+  }
+
+  generator<T> get_return_object(); // 后续实现，返回生成器对象
+
+  void return_void() noexcept {} // 无返回值
+
+  void unhandled_exception() noexcept { std::terminate(); } // 异常终止
+
+  // 2. co_yield 核心方法：接收产出值，返回挂起标记
+  std::experimental::suspend_always yield_value(T& value) noexcept {
+    value_ptr = std::addressof(value); // 存储产出值的地址（引用传递，无拷贝）
+    return {}; // 返回 suspend_always，让协程在 co_yield 处挂起
+  }
+
+  // 供 generator 迭代器获取产出值
+  const T& current_value() const noexcept {
+    assert(value_ptr != nullptr);
+    return *value_ptr;
+  }
+
+  // 设置协程句柄
+  void set_self(std::experimental::coroutine_handle<generator_promise<T>> h) noexcept {
+    self = h;
+  }
+};
+
+// 生成器类（实现迭代器接口，供调用者遍历产出值）
+template<typename T>
+class generator {
+public:
+  using promise_type = generator_promise<T>;
+  using handle_type = std::experimental::coroutine_handle<promise_type>;
+
+  // 迭代器类（核心：通过 resume() 恢复协程，获取下一个值）
+  class iterator {
+  public:
+    explicit iterator(handle_type h) : handle(h) {}
+
+    // 迭代器自增：恢复协程，获取下一个值
+    iterator& operator++() noexcept {
+      handle.resume(); // 恢复协程，执行到下一个 co_yield 或结束
+      if (handle.done()) { // 协程执行完毕，置空句柄
+        handle = nullptr;
+      }
+      return *this;
+    }
+
+    // 取值：获取当前产出值
+    const T& operator*() const noexcept {
+      return handle.promise().current_value();
+    }
+
+    // 相等判断：句柄为空则迭代结束
+    bool operator==(std::nullptr_t) const noexcept {
+      return handle == nullptr;
+    }
+
+  private:
+    handle_type handle;
+  };
+
+  // 构造函数：接收协程句柄
+  explicit generator(handle_type h) : handle(h) {
+    if (handle) {
+      handle.promise().set_self(handle); // 绑定句柄到 promise
+    }
+  }
+
+  // 析构函数：销毁协程帧
+  ~generator() noexcept {
+    if (handle) handle.destroy();
+  }
+
+  // 迭代器开始：恢复协程，返回第一个值的迭代器
+  iterator begin() noexcept {
+    if (handle) handle.resume();
+    return iterator(handle);
+  }
+
+  // 迭代器结束：空指针
+  std::nullptr_t end() noexcept {
+    return nullptr;
+  }
+
+private:
+  handle_type handle;
+};
+
+// 实现 promise 的 get_return_object()：返回 generator 对象
+template<typename T>
+generator<T> generator_promise<T>::get_return_object() {
+  return generator<T>{handle_type::from_promise(*this)};
+}
+
+// 测试：使用 co_yield 实现简单生成器
+generator<int> count_from(int start, int step = 1) {
+  for (int i = start;; i += step) {
+    co_yield i; // 产出 i，挂起协程，等待迭代器++恢复
+  }
+}
+
+// 调用示例
+int main() {
+  int sum = 0;
+  // 遍历生成器：每次迭代调用 iterator++，恢复协程获取下一个值
+  for (int val : count_from(1, 2)) {
+    if (val > 10) break;
+    sum += val; // 1 + 3 + 5 + 7 + 9 = 25
+  }
+  assert(sum == 25);
+  return 0;
+}
+```
 
 ## Understanding Symmetric Transfer
 
