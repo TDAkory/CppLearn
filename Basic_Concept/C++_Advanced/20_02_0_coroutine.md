@@ -45,6 +45,8 @@
     - [假设有如下执行流](#假设有如下执行流)
     - [Task概要](#task概要)
     - [完善`Task::promise_type`](#完善taskpromise_type)
+    - [完善`task::operator co_await()`](#完善taskoperator-co_await)
+    - [深入理解这个例子](#深入理解这个例子)
 
 ## Refs
 
@@ -1470,5 +1472,83 @@ public:
   task get_return_object() noexcept {
     return task{std::coroutine_handle<promise_type>::from_promise(*this)};
   }
+
+  std::suspend_always initial_suspend() noexcept {
+    return {};
+  }
+
+  void return_void() noexcept {}
+
+  void unhandled_exception() noexcept {
+    std::terminate();
+  }
+
+  struct final_awaiter {
+    bool await_ready() noexcept {
+      return false;
+    }
+
+    void await_suspend(std::coroutine_handle<promise_type> h) noexcept {
+      // The coroutine is now suspended at the final-suspend point.
+      // Lookup its continuation in the promise and resume it.
+      h.promise().continuation.resume();
+    }
+
+    void await_resume() noexcept {}
+  };
+
+  final_awaiter final_suspend() noexcept {
+    return {};
+  }
+
+  std::coroutine_handle<> continuation;
 }
 ```
+
+C++ 协程延迟启动（lazy start） 优势: 避免线程同步的竞态问题、简化协程帧的销毁逻辑并支持编译器优化、提升协程代码的异常安全性
+
+- 如果协程是延迟启动的，你可以在协程开始执行之前，就把后续要执行的逻辑（续体）的coroutine_handle绑定到这个协程上。这样就不会出现「你还没绑定续体，协程就已经在另一个线程执行完了」的竞态场景，因此不需要额外的线程同步（如互斥锁、条件变量）来处理这种竞态问题，简化了代码且提升了性能。
+- 延迟启动的协程，只有当你co_await它时才会执行；而在它执行期间，调用它的协程会被挂起，不会去调用task的析构函数。因此，task的析构函数可以无条件销毁协程帧，无需担心协程还在另一个线程执行（从而导致析构时的线程安全问题）。
+  - 这种特性让编译器能更好地做HALO 优化：把协程帧的分配内联到调用者的栈帧中，避免堆分配，提升程序运行效率。
+- 如果协程是立即启动的，当你获取到task后没有立即co_await，而是先执行了一段可能抛出异常的代码：一旦异常发生，栈展开会调用task的析构函数，但此时协程可能还在后台执行，这会导致你陷入两难选择（比如分离协程可能导致悬垂引用、析构时阻塞线程、终止程序或产生未定义行为）。
+  - 而延迟启动的协程，此时还未开始执行，因此task析构时可以安全销毁协程帧，不会出现上述问题，大幅提升了代码的异常安全性。
+
+### 完善`task::operator co_await()`
+
+```cpp
+class task::awaiter {
+public:
+  bool await_ready() noexcept {
+    return false;
+  }
+
+  void await_suspend(std::coroutine_handle<> continuation) noexcept {
+    // Store the continuation in the task's promise so that the final_suspend()
+    // knows to resume this coroutine when the task completes.
+    coro_.promise().continuation = continuation;
+
+    // Then we resume the task's coroutine, which is currently suspended
+    // at the initial-suspend-point (ie. at the open curly brace).
+    coro_.resume();
+  }
+
+  void await_resume() noexcept {}
+
+private:
+  explicit awaiter(std::coroutine_handle<task::promise_type> h) noexcept
+  : coro_(h)
+  {}
+
+  std::coroutine_handle<task::promise_type> coro_;
+};
+
+task::awaiter task::operator co_await() && noexcept {
+  return awaiter{coro_};
+}
+```
+
+### 深入理解这个例子
+
+> You can see the complete set of code in Compiler Explorer here: https://godbolt.org/z/-Kw6Nf
+
+TODO zjy
