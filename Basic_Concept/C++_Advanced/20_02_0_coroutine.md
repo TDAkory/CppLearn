@@ -50,32 +50,12 @@
     - [The Coroutines TS solution](#the-coroutines-ts-solution)
     - [The problems](#the-problems)
     - [Enter Symmetric Transfer](#enter-symmetric-transfer)
-    - [一、核心需求响应](#一核心需求响应)
-    - [二、对称转移（Symmetric Transfer）全解析](#二对称转移symmetric-transfer全解析)
-      - [1. 先搞懂：异步转移（Asymmetric Transfer）的问题](#1-先搞懂异步转移asymmetric-transfer的问题)
-      - [2. 对称转移的核心定义](#2-对称转移的核心定义)
-      - [3. P0913R0的两个关键修改（对称转移的基础）](#3-p0913r0的两个关键修改对称转移的基础)
-        - [（1）`await_suspend`可返回`std::coroutine_handle<T>`](#1await_suspend可返回stdcoroutine_handlet)
-        - [（2）`std::experimental::noop_coroutine()`](#2stdexperimentalnoop_coroutine)
-      - [4. 编译器对对称转移版`co_await`的降阶处理](#4-编译器对对称转移版co_await的降阶处理)
-        - [关键逻辑：](#关键逻辑)
-      - [5. 尾调用（Tail-call）：对称转移的“底层支撑”](#5-尾调用tail-call对称转移的底层支撑)
-        - [（1）尾调用的定义](#1尾调用的定义)
-        - [（2）协程如何满足尾调用的所有条件](#2协程如何满足尾调用的所有条件)
-      - [6. 改造task实现：对称转移的实战应用](#6-改造task实现对称转移的实战应用)
-        - [（1）修改`task::awaiter::await_suspend`](#1修改taskawaiterawait_suspend)
-        - [（2）修改`task::promise_type::final_awaiter::await_suspend`](#2修改taskpromise_typefinal_awaiterawait_suspend)
-      - [7. 栈变化的可视化解析（核心：栈帧不累积）](#7-栈变化的可视化解析核心栈帧不累积)
-        - [步骤1：`loop_synchronously`初始执行](#步骤1loop_synchronously初始执行)
-        - [步骤2：执行`co_await completes_synchronously()`](#步骤2执行co_await-completes_synchronously)
-        - [步骤3：`completes_synchronously`完成，执行`final_suspend`](#步骤3completes_synchronously完成执行final_suspend)
-        - [步骤4：销毁`completes_synchronously`的临时task](#步骤4销毁completes_synchronously的临时task)
-      - [8. `noop_coroutine()`：终止对称转移的“递归”](#8-noop_coroutine终止对称转移的递归)
-      - [9. 对称转移：通用的`await_suspend`形式](#9-对称转移通用的await_suspend形式)
-        - [（1）模拟void返回版（无条件挂起，返回给调用者）](#1模拟void返回版无条件挂起返回给调用者)
-        - [（2）模拟bool返回版（条件挂起或恢复当前协程）](#2模拟bool返回版条件挂起或恢复当前协程)
-      - [10. 为什么保留三种`await_suspend`形式？](#10-为什么保留三种await_suspend形式)
-    - [三、总结](#三总结)
+    - [修正 `Task` 的实现](#修正-task-的实现)
+    - [Symmetric Transfer as the Universal Form of await\_suspend](#symmetric-transfer-as-the-universal-form-of-await_suspend)
+  - [Compiler Transform](#compiler-transform)
+    - [Step 1. Determining the promise type](#step-1-determining-the-promise-type)
+    - [Step 2: Creating the coroutine state](#step-2-creating-the-coroutine-state)
+    - [Step 3: Call `get_return_object()`](#step-3-call-get_return_object)
 
 ## Refs
 
@@ -1833,61 +1813,61 @@ task bar()
 
 ### Enter Symmetric Transfer
 
-### 一、核心需求响应
-你提供了一篇关于**对称转移（Symmetric Transfer）**的深度技术文档，核心是解释这一机制如何从根源上解决协程栈溢出问题，同时避免原子方案的非确定性上下文问题。你的需求是让我对这份文档进行**全面、细致的解析**，包括对称转移的核心概念、编译器的底层处理、尾调用优化的作用、task实现的改造、栈变化的可视化，以及对称转移与其他`await_suspend`形式的关系等。我会用通俗的语言拆解这些技术点，让你清晰理解对称转移的工作原理和价值。
+> When you resume a coroutine by calling .resume() on it’s std::coroutine_handle the caller of .resume() remains active on the stack while the resumed coroutine executes. When this coroutine next suspends and the call to await_suspend() for that suspend-point returns either void (indicating unconditional suspend) or true (indicating conditional suspend) then call to .resume() will return.
+>
+> This can be thought of as an “asymmetric transfer” of execution to the coroutine and behaves just like an ordinary function call. 
+>
+> Every time we resume a coroutine by calling .resume() we create a new stack-frame for the execution of that coroutine.
 
-### 二、对称转移（Symmetric Transfer）全解析
-#### 1. 先搞懂：异步转移（Asymmetric Transfer）的问题
 要理解对称转移，首先要对比它的对立面——**异步转移（Asymmetric Transfer）**（也就是之前的`void`/`bool`返回版`await_suspend`的行为）：
+
 - **核心特征**：协程的恢复是**“调用者-被调用者”**的关系，就像普通函数调用。调用`coro.resume()`的函数会留在栈上，直到被恢复的协程挂起并返回`void`/`true`，`resume()`才会返回。
 - **栈的问题**：每次`resume()`都会创建新的栈帧，递归/循环调用时栈帧持续累积，最终导致栈溢出。
 - **举例**：之前的`loop_synchronously`循环中，每次`co_await`都会在栈上新增`completes_synchronously$resume`、`await_suspend`等栈帧，无法释放。
 
-#### 2. 对称转移的核心定义
 对称转移是**协程间的无缝切换**，核心特征是：
+
 - 没有隐含的“调用者-被调用者”关系：一个协程挂起时，可以直接转移执行权到**任意**已挂起的协程（包括自身），无需返回给之前的恢复者。
 - 不累积栈帧：转移时会复用栈空间（通过尾调用优化），即使循环百万次，栈帧数量也保持恒定。
 - 形象比喻：异步转移是“嵌套的俄罗斯套娃”（栈帧层层嵌套），对称转移是“平级的跳棋”（协程间直接跳转，无嵌套）。
 
-#### 3. P0913R0的两个关键修改（对称转移的基础）
-Gor Nishanov的P0913R0提案为C++协程添加了两个核心特性，支撑起对称转移：
-##### （1）`await_suspend`可返回`std::coroutine_handle<T>`
-- 语义：返回的句柄表示**下一个要执行的协程**，编译器会直接将执行权转移到该协程。
-- 对比：之前的`void`返回表示“挂起并返回给resume调用者”，`bool`返回表示“是否挂起”；现在的句柄返回表示“直接跳转到这个协程”。
+[P0913R0](https://wg21.link/P0913R0)的两个关键修改（对称转移的基础）
 
-##### （2）`std::experimental::noop_coroutine()`
-- 作用：返回一个**特殊的协程句柄**，其`resume()`方法是“空操作”（仅执行`ret`指令，直接返回）。
-- 语义：当`await_suspend`返回这个句柄时，协程会挂起并**返回给`resume()`的调用者**（相当于模拟`void`/`bool`返回的行为），用于“终止”协程的转移链。
+1. `await_suspend`可返回`std::coroutine_handle<T>`
+   1. 语义：返回的句柄表示**下一个要执行的协程**，编译器会直接将执行权转移到该协程。
+   2. 对比：之前的`void`返回表示“挂起并返回给resume调用者”，`bool`返回表示“是否挂起”；现在的句柄返回表示“直接跳转到这个协程”。
+2. `std::experimental::noop_coroutine()`
+   1. 作用：返回一个**特殊的协程句柄**，其`resume()`方法是“空操作”（仅执行`ret`指令，直接返回）。
+   2. 语义：当`await_suspend`返回这个句柄时，协程会挂起并**返回给`resume()`的调用者**（相当于模拟`void`/`bool`返回的行为），用于“终止”协程的转移链。
 
-#### 4. 编译器对对称转移版`co_await`的降阶处理
-用户文档中给出了编译器处理对称转移版`co_await`的伪代码，我们拆解**关键部分**（这是理解对称转移的核心）：
+编译器对对称转移版`co_await`的降阶处理：
+
 ```cpp
 // 省略前置的await_ready()判断、获取awaiter等步骤
 if (!awaiter.await_ready())
 {
-  // 挂起当前协程
+  //<suspend-coroutine>  
   auto h = awaiter.await_suspend(handle_t::from_promise(p));
   h.resume(); // 执行下一个协程
   // <return-to-caller-or-resumer> → 本质是return;语句
+
+  //<resume-point>
 }
 return awaiter.await_resume();
 ```
-##### 关键逻辑：
-1. 调用`await_suspend`，获取**下一个要执行的协程句柄h**。
-2. 调用`h.resume()`，执行该协程。
-3. 立即执行`return;`，从当前的`resume()`函数中返回（这是尾调用的关键）。
+
+> Once the coroutine state-machine is lowered (a topic for another post), the <return-to-caller-or-resumer> part basically becomes a return; statement which causes the call to .resume() that last resumed the coroutine to return to its caller.
 
 这意味着：`h.resume()`是当前函数的**最后一个操作**（尾位置），编译器可以将其优化为**尾调用**（tail-call），从而避免栈帧累积。
 
-#### 5. 尾调用（Tail-call）：对称转移的“底层支撑”
-##### （1）尾调用的定义
 尾调用是指**函数的最后一个操作是调用另一个函数**，且调用后没有其他逻辑（仅返回）。编译器会优化这种调用：
+
 - 弹出当前函数的栈帧，再跳转到被调用函数（用`jmp`指令代替`call`指令）。
 - 被调用函数的返回地址直接指向当前函数的调用者，无需返回当前函数。
 - 效果：栈帧数量不增加，相当于“复用”栈空间。
 
-##### （2）协程如何满足尾调用的所有条件
 尾调用优化有严格的条件，而协程的对称转移设计**恰好全部满足**，因此编译器能**保证**尾调用优化（即使关闭优化也会生效）：
+
 | 尾调用条件 | 协程的满足方式 |
 |------------|----------------|
 | 调用约定一致 | 协程的执行体（`$resume`）由编译器控制，使用统一的调用约定（与`resume()`一致） |
@@ -1897,136 +1877,331 @@ return awaiter.await_resume();
 
 这是对称转移能解决栈溢出的**根本原因**：尾调用优化保证了栈帧不会累积。
 
-#### 6. 改造task实现：对称转移的实战应用
-我们对比**修改前**（void返回版）和**修改后**（对称转移版）的代码，看核心变化：
+### 修正 `Task` 的实现
 
-##### （1）修改`task::awaiter::await_suspend`
 ```cpp
-// 修改前：void返回，直接调用resume()（异步转移，栈累积）
-void task::awaiter::await_suspend(std::coroutine_handle<> continuation) noexcept {
+std::coroutine_handle<> task::awaiter::await_suspend(
+    std::coroutine_handle<> continuation) noexcept {
+  // Store the continuation in the task's promise so that the final_suspend()
+  // knows to resume this coroutine when the task completes.
   coro_.promise().continuation = continuation;
-  coro_.resume(); // 新增栈帧
+
+  // Then we tail-resume the task's coroutine, which is currently suspended
+  // at the initial-suspend-point (ie. at the open curly brace), by returning
+  // its handle from await_suspend().
+  return coro_;
 }
 
-// 修改后：返回coroutine_handle，对称转移（尾调用，无栈累积）
-std::coroutine_handle<> task::awaiter::await_suspend(std::coroutine_handle<> continuation) noexcept {
-  coro_.promise().continuation = continuation;
-  return coro_; // 返回被await的协程句柄，编译器会尾调用resume()
+std::coroutine_handle<> task::promise_type::final_awaiter::await_suspend(
+    std::coroutine_handle<promise_type> h) noexcept {
+  // The coroutine is now suspended at the final-suspend point.
+  // Lookup its continuation in the promise and resume it symmetrically.
+  return h.promise().continuation;
 }
 ```
-**关键变化**：从直接调用`coro_.resume()`改为返回`coro_`，让编译器通过尾调用执行`resume()`，避免栈帧累积。
 
-##### （2）修改`task::promise_type::final_awaiter::await_suspend`
+**`task::awaiter::await_suspend`**
+
+1. **原实现**：返回`void`，直接调用`coro_.resume()`恢复task的协程。这种方式会在当前栈帧中嵌套执行`resume()`，多次嵌套后会导致**栈溢出**。
+2. **新实现**：返回`std::coroutine_handle<>`（即`coro_`），由协程调度器以**对称转移**的方式恢复task的协程，避免了栈帧嵌套，解决栈溢出问题。
+
+**`task::promise_type::final_awaiter::await_suspend`**
+
+1. **原实现**：返回`void`，直接调用`continuation.resume()`恢复等待的协程。这种方式的恢复上下文由当前执行线程决定，存在**非确定性**。
+2. **新实现**：返回`std::coroutine_handle<>`（即`continuation`），通过对称转移恢复等待的协程，恢复上下文由调度器统一管理，保证了确定性。
+
+[example above with changes](https://godbolt.org/z/9baieF)
+
+### Symmetric Transfer as the Universal Form of await_suspend
+
+`std::noop_coroutine()`
+
+1. **定义**：`std::noop_coroutine()`是C++协程标准库提供的函数，返回一个特殊的**空操作协程句柄（noop coroutine handle）**，类型为`std::noop_coroutine_handle`（可隐式转换为`std::coroutine_handle<>`）。
+2. **行为**：调用该句柄的`.resume()`方法时，**不会执行任何逻辑，只会立即返回**（底层通常是一条`ret`指令）。
+3. **核心作用**：当`await_suspend()`返回`std::noop_coroutine()`时，协程的执行权会**转移回调用`std::coroutine_handle::resume()`的原始调用者**（而非转移到其他协程），这填补了对称转移形式中“无需恢复其他协程，仅需返回调用者”的场景空白。
+
+`void`返回类型的`await_suspend()`
+
 ```cpp
-// 修改前：void返回，直接调用resume()（异步转移，栈累积）
-void task::promise_type::final_awaiter::await_suspend(std::coroutine_handle<promise_type> h) noexcept {
-  h.promise().continuation.resume(); // 新增栈帧
-}
-
-// 修改后：返回coroutine_handle，对称转移（尾调用，无栈累积）
-std::coroutine_handle<> task::promise_type::final_awaiter::await_suspend(std::coroutine_handle<promise_type> h) noexcept {
-  return h.promise().continuation; // 返回续体句柄，编译器尾调用resume()
-}
-```
-**关键变化**：从直接调用`continuation.resume()`改为返回`continuation`，实现协程完成后向续体的对称转移。
-
-#### 7. 栈变化的可视化解析（核心：栈帧不累积）
-以`loop_synchronously`循环调用`completes_synchronously`为例，我们一步步看栈的变化（对应文档中的栈/堆示意图）：
-
-##### 步骤1：`loop_synchronously`初始执行
-栈中只有`loop_synchronously$resume`和`coroutine_handle::resume`帧，堆中有`loop_synchronously`的协程帧。
-```
-栈：[loop_synchronously$resume → coroutine_handle::resume → ...]
-堆：[loop_synchronously帧 → 外部协程帧]
-```
-
-##### 步骤2：执行`co_await completes_synchronously()`
-1. 创建`completes_synchronously`的协程帧（堆）。
-2. 调用`await_suspend`，返回`completes_synchronously`的句柄。
-3. 编译器执行尾调用：**弹出`loop_synchronously`的栈帧**，跳转到`completes_synchronously$resume`。
-```
-栈：[completes_synchronously$resume → coroutine_handle::resume → ...]
-堆：[completes_synchronously帧 → loop_synchronously帧 → 外部协程帧]
-```
-**关键**：栈帧数量没有增加，只是替换了协程执行体。
-
-##### 步骤3：`completes_synchronously`完成，执行`final_suspend`
-1. 调用`final_awaiter::await_suspend`，返回`loop_synchronously`的句柄。
-2. 编译器执行尾调用：**弹出`completes_synchronously`的栈帧**，跳转回`loop_synchronously$resume`。
-```
-栈：[loop_synchronously$resume → coroutine_handle::resume → ...]
-堆：[completes_synchronously帧 → loop_synchronously帧 → 外部协程帧]
-```
-
-##### 步骤4：销毁`completes_synchronously`的临时task
-堆中的`completes_synchronously`帧被销毁，栈和堆回到初始状态。
-```
-栈：[loop_synchronously$resume → coroutine_handle::resume → ...]
-堆：[loop_synchronously帧 → 外部协程帧]
-```
-
-**最终效果**：每次循环后，栈和堆都回到初始状态，**栈帧数量恒定**，无论循环多少次都不会栈溢出。
-
-#### 8. `noop_coroutine()`：终止对称转移的“递归”
-对称转移的协程会不断转移执行权到其他协程，但有时我们需要**停止转移，返回给`resume()`的调用者**（比如异步操作需要等待IO，没有其他协程可执行）。这时就需要`std::noop_coroutine()`：
-- 它返回的句柄执行`resume()`时，会直接返回（相当于`ret`指令）。
-- 作用：将对称转移的执行链“终止”，回到最初的`resume()`调用者。
-
-#### 9. 对称转移：通用的`await_suspend`形式
-对称转移可以模拟`void`和`bool`返回的`await_suspend`行为，是**通用形式**：
-
-##### （1）模拟void返回版（无条件挂起，返回给调用者）
-```cpp
-// void返回版
-void my_awaiter::await_suspend(std::coroutine_handle<> h) {
-  enqueue(h); // 入队，异步处理
-}
-
-// 对称转移版（用noop_coroutine()模拟）
 std::coroutine_handle<> my_awaiter::await_suspend(std::coroutine_handle<> h) {
-  enqueue(h);
-  return std::noop_coroutine(); // 返回noop，终止转移，返回给调用者
+  this->coro = h;
+  enqueue(this);
+  // 返回noop协程句柄：执行权返回给.resume()调用者（与void形式完全等效）
+  return std::noop_coroutine();
 }
 ```
 
-##### （2）模拟bool返回版（条件挂起或恢复当前协程）
+表示`bool`返回类型的`await_suspend()`
+
 ```cpp
-// bool返回版
-bool my_awaiter::await_suspend(std::coroutine_handle<> h) {
-  if (try_start(h)) {
-    return true; // 异步，返回给调用者
+std::coroutine_handle<> my_awaiter::await_suspend(std::coroutine_handle<> h) {
+  this->coro = h;
+  if (try_start(this)) {
+    // 异步执行：返回noop，执行权返回给.resume()调用者（对应bool的true）
+    return std::noop_coroutine();
+  }
+  // 同步完成：返回当前协程句柄h，立即恢复当前协程（对应bool的false）
+  return h;
+}
+```
+
+尽管对称转移是通用形式，但C++仍保留`void`、`bool`、`std::coroutine_handle<>`三种返回类型，原因分为**历史、实用、性能**三个层面：
+
+1. `void`返回的`await_suspend()`是最早的协程设计版本，在对称转移（P0913R0提案）引入前就已经被广泛使用。为了**兼容现有代码**，标准委员会保留了这种形式。
+2. 对于**无条件挂起并返回调用者**的场景，`void`形式的代码更简洁（少写`return std::noop_coroutine();`），对新手更友好。例如：
+3. 在某些场景下，`bool`形式的优化效果优于对称转移形式，核心差异在于**编译器的静态分析能力**：
+   1. **场景**：当`await_suspend()`定义在**另一个编译单元（.cpp文件）**时，编译器无法看到其内部逻辑。
+      1. **bool形式**：编译器知道返回值只有`true`/`false`两种可能，可生成**简单的分支逻辑**（`if (ret) { 返回调用者 } else { 恢复当前协程 }`），执行效率高。
+      2. **对称转移形式**：编译器无法确定返回的协程句柄是`noop`还是当前协程句柄，只能生成**间接调用+分支逻辑**（需要解析句柄指向的协程入口），开销略大。
+   2. **例外**：如果`await_suspend()`是**内联（inline）**定义的，编译器可以优化对称转移形式到与`bool`形式等效的性能，但当前编译器（如Clang 10）对这种优化的支持还不完善。
+
+**the general rule** is:
+
+- If you need to unconditionally return to .resume() caller, use the void-returning flavour.
+- If you need to conditionally return to .resume() caller or resume current coroutine use the bool-returning flavour.
+- If you need to resume another coroutine use the symmetric-transfer flavour.
+
+## Compiler Transform
+
+**what happens when a coroutine reaches a suspend-point by walking through the lowering of a coroutine into equivalent non-coroutine, imperative C++ code.**
+
+assume we have a basic task type that acts as both an awaitable and a coroutine return-type. For the sake of simplicity, let’s assume that this coroutine type allows producing a result of type int asynchronously.
+
+```cpp
+// Forward declaration of some other function. Its implementation is not relevant.
+task f(int x);
+
+// A simple coroutine that we are going to translate to non-C++ code
+task g(int x) {
+    int fx = co_await f(x);
+    co_return fx * fx;
+}
+```
+
+先定义一下 `task` 类型
+
+```cpp
+class task {
+public:
+    struct awaiter;
+
+    class promise_type {
+    public:
+        promise_type() noexcept;
+        ~promise_type();
+
+        struct final_awaiter {
+            bool await_ready() noexcept;
+            std::coroutine_handle<> await_suspend(
+                std::coroutine_handle<promise_type> h) noexcept;
+            void await_resume() noexcept;
+        };
+
+        task get_return_object() noexcept;
+        std::suspend_always initial_suspend() noexcept;
+        final_awaiter final_suspend() noexcept;
+        void unhandled_exception() noexcept;
+        void return_value(int result) noexcept;
+
+    private:
+        friend task::awaiter;
+        std::coroutine_handle<> continuation_;
+        std::variant<std::monostate, int, std::exception_ptr> result_;
+    };
+
+    task(task&& t) noexcept;
+    ~task();
+    task& operator=(task&& t) noexcept;
+
+    struct awaiter {
+        explicit awaiter(std::coroutine_handle<promise_type> h) noexcept;
+        bool await_ready() noexcept;
+        std::coroutine_handle<promise_type> await_suspend(
+            std::coroutine_handle<> h) noexcept;
+        int await_resume();
+    private:
+        std::coroutine_handle<promise_type> coro_;
+    };
+
+    awaiter operator co_await() && noexcept;
+
+private:
+    explicit task(std::coroutine_handle<promise_type> h) noexcept;
+
+    std::coroutine_handle<promise_type> coro_;
+};
+```
+
+### Step 1. Determining the promise type
+
+编译器处理协程的第一步，就是找到这个Promise类型，因为后续的所有协程转换都依赖于它。
+
+以协程函数`task g(int x)`为例，编译器看到函数`g`中包含`co_await`和`co_return`（协程关键字），立即将其标记为**协程函数**，并启动协程转换流程，第一步就是查找Promise类型。
+
+编译器会根据协程的**返回类型**和**参数类型**，实例化标准库的`std::coroutine_traits`模板。对于`task g(int x)`：`std::coroutine_traits<task, int>::promise_type`
+
+```cpp
+using __g_promise_t = std::coroutine_traits<task, int>::promise_type;
+```
+
+如果用户特化`std::coroutine_traits`（高级场景）：返回类型本身没有嵌套的`promise_type`（比如内置类型、第三方库类型），可以通过**特化`std::coroutine_traits`**来指定Promise类型。例如：
+
+```cpp
+// 假设返回类型是int（内置类型，无promise_type），特化协程特质
+namespace std {
+    template <>
+    struct coroutine_traits<int, int> {
+        // 手动指定Promise类型为自定义的my_promise
+        using promise_type = my_promise;
+    };
+}
+
+// 此时协程函数int g(int x)的Promise类型就是my_promise
+task g(int x) { /* ... */ }
+```
+
+这种方式常用于扩展协程返回类型的灵活性，但日常开发中（如自定义`task`/`future`），使用默认的主模板（返回类型嵌套`promise_type`）是更简洁的选择。
+
+```mermaid
+graph TD
+    A[编译器识别到协程函数] --> B[实例化std::coroutine_traits<task, int>]
+    B --> C{用户是否特化该模板？}
+    C -->|否（默认）| D[使用主模板：取返回类型task的嵌套promise_type]
+    C -->|是| E[使用特化模板中定义的promise_type]
+    D --> F[最终Promise类型：task::promise_type]
+    E --> F
+    F --> G[编译器创建内部别名__g_promise_t]
+```
+
+### Step 2: Creating the coroutine state
+
+A coroutine function needs to preserve the state of the coroutine, parameters and local variables when it suspends so that they remain available when the coroutine is later resumed.
+
+This state, in C++ standardese, is called the coroutine state and is typically heap allocated.
+
+编译器会生成一个内部结构体（如__g_state），用于存储协程状态的所有组成部分。这个结构体的内容会逐步填充，核心包含四类数据：
+
+- Promise 对象：协程的 “管家”，管理协程的返回值、挂起 / 恢复逻辑。
+- 函数参数的拷贝：协程暂停后，原函数参数可能销毁，因此需要拷贝到协程状态中。
+- 暂停点信息：记录协程当前暂停的位置，以及如何恢复 / 销毁协程。
+- 跨暂停点的局部变量 / 临时对象：生命周期覆盖暂停点的变量需要存储在这里。
+
+**初始骨架代码**：
+
+```cpp
+struct __g_state {
+    int x;
+    __g_promise_t __promise;
+
+    // to be filled out
+};
+```
+
+编译器会为`__g_state`生成构造函数，完成**参数拷贝**和**Promise对象的初始化**。这里有一个关键规则：
+
+> 编译器会优先尝试用**协程参数的左值引用**初始化Promise对象；如果Promise的构造函数不支持该参数列表，则使用**默认构造函数**初始化。
+
+```cpp
+template<typename Promise, typename... Params>
+Promise construct_promise([[maybe_unused]] Params&... params) {
+    if constexpr (std::constructible_from<Promise, Params&...>) {
+        return Promise(params...);
+    } else {
+        return Promise();
+    }
+}
+
+struct __g_state {
+    __g_state(int&& x)
+    : x(static_cast<int&&>(x))
+    , __promise(construct_promise<__g_promise_t>(this->x))
+    {}
+
+    int x;
+    __g_promise_t __promise;
+    // to be filled out
+};
+```
+
+编译器会将原协程函数`g(int x)`转换为“ramp function”（入口函数），首先完成**协程状态的内存分配**，这一步有三种不同的分配策略，优先级从高到低依次为：
+
+策略1：使用Promise类型的自定义`operator new`（参数预览能力）。如果Promise类型（`task::promise_type`）定义了**自定义的`operator new`**，编译器会优先使用它来分配内存，并且支持“参数预览”（即把协程参数传递给`operator new`，用于自定义分配逻辑，比如用参数中的分配器分配内存）。
+
+```cpp
+// 辅助函数：根据参数匹配选择自定义operator new的调用方式
+template<typename Promise, typename... Args>
+void* __promise_allocate(std::size_t size, [[maybe_unused]] Args&... args) {
+  if constexpr (requires { Promise::operator new(size, args...); }) {
+    // 情况1：自定义operator new支持参数列表（如operator new(size_t, int)）
+    return Promise::operator new(size, args...);
   } else {
-    return false; // 同步，恢复当前协程
+    // 情况2：仅支持size_t参数
+    return Promise::operator new(size);
   }
 }
 
-// 对称转移版
-std::coroutine_handle<> my_awaiter::await_suspend(std::coroutine_handle<> h) {
-  if (try_start(h)) {
-    return std::noop_coroutine(); // 异步，返回给调用者
-  } else {
-    return h; // 同步，恢复当前协程（返回自身句柄）
-  }
+// 协程函数的ramp function部分
+task g(int x) {
+    // 1. 用Promise的自定义operator new分配内存（大小为协程状态的大小）
+    void* state_mem = __promise_allocate<__g_promise_t>(sizeof(__g_state), x);
+    __g_state* state = nullptr;
+    try {
+        // 2. 原地构造协程状态对象（placement new）
+        state = ::new (state_mem) __g_state(static_cast<int&&>(x));
+    } catch (...) {
+        // 3. 构造失败，释放内存并抛出异常
+        __g_promise_t::operator delete(state_mem);
+        throw;
+    }
+
+    // ……
 }
 ```
 
-#### 10. 为什么保留三种`await_suspend`形式？
-尽管对称转移是通用形式，但C++仍保留了`void`/`bool`返回版，原因有三：
-- **历史原因**：`void`返回版是最早的设计，已有大量代码使用。
-- **实用原因**：`void`返回版代码更简洁（无需返回`noop_coroutine()`），适合无条件挂起的场景。
-- **性能原因**：`bool`返回版在某些场景下（如await_suspend在另一个编译单元），编译器能生成更高效的代码（直接分支，而非间接调用）。
+策略2：处理Promise的分配失败回调（`get_return_object_on_allocation_failure`）。如果Promise类型定义了静态成员函数`get_return_object_on_allocation_failure()`，编译器会使用**不抛出异常的`operator new`（`std::nothrow`）**分配内存。若分配失败（返回`nullptr`），则直接返回该函数的结果，避免程序崩溃。
 
-**通用规则**：
-- 无条件返回给`resume()`调用者：用`void`返回版。
-- 条件返回或恢复当前协程：用`bool`返回版。
-- 恢复另一个协程（避免栈溢出）：用对称转移版（返回`coroutine_handle`）。
+```cpp
+task g(int x) {
+    // 1. 使用nothrow版new分配内存，失败时返回nullptr
+    auto* state = ::new (std::nothrow) __g_state(static_cast<int&&>(x));
+    if (state == nullptr) {
+        // 2. 分配失败，返回Promise指定的默认返回对象
+        return __g_promise_t::get_return_object_on_allocation_failure();
+    }
+    // ... 后续的协程逻辑
+}
+```
 
-### 三、总结
-对称转移是解决协程栈溢出问题的**终极方案**，其核心要点如下：
-1. **核心优势**：协程间无缝切换，无栈帧累积，且恢复上下文确定（避免原子方案的非确定性）。
-2. **底层支撑**：编译器对尾调用的优化，协程的设计满足尾调用的所有条件，保证栈帧不增长。
-3. **task改造关键**：将`await_suspend`从`void`返回改为返回协程句柄，让编译器执行尾调用。
-4. **noop_coroutine()作用**：终止对称转移的执行链，返回给`resume()`的调用者。
-5. **通用形式**：可模拟`void`/`bool`返回的`await_suspend`，但保留三种形式是为了历史、实用和性能。
+策略3：使用全局`::operator new`（默认情况，最简单）。如果Promise类型没有定义自定义`operator new`，也没有`get_return_object_on_allocation_failure()`，编译器会直接使用全局的`::operator new`分配内存（这是示例中使用的简化版本）。
 
-这一机制也是现代协程库（如cppcoro、Boost.Asio）的核心设计，是实现高效、安全协程的基础。
+```cpp
+task g(int x) {
+    // 直接分配协程状态的内存，并用参数初始化
+    auto* state = new __g_state(static_cast<int&&>(x));
+    // ... 后续的协程逻辑
+}
+```
+
+### Step 3: Call `get_return_object()`
+
+`get_return_object()`是Promise类型的**核心成员函数**，其唯一职责是：
+> 返回协程函数的**外部可见返回对象**（即协程函数签名中声明的返回类型，如`task`）。
+
+编译器会在**协程状态初始化后**，立即调用Promise对象的`get_return_object()`方法，获取协程的返回对象，并将其存储为局部变量，等待后续返回给调用者。
+
+```cpp
+task g(int x) {
+    // 改进：用unique_ptr管理协程状态，自动释放内存
+    // 即使后续抛出异常，unique_ptr的析构函数也会调用delete
+    std::unique_ptr<__g_state> state(new __g_state(static_cast<int&&>(x)));
+
+    // 调用get_return_object()：如果抛出异常，unique_ptr会自动释放state
+    decltype(auto) return_value = state->__promise.get_return_object();
+
+    // ... 后续的协程逻辑
+
+    // 注意：这里返回return_value前，需要考虑是否释放unique_ptr的所有权
+    // （因为协程状态的生命周期通常要长于ramp function，见下文补充说明）
+    return return_value;
+}
+```
