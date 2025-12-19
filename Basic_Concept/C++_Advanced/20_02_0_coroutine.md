@@ -59,6 +59,13 @@
     - [Step 4: The initial-suspend point](#step-4-the-initial-suspend-point)
     - [Step 5: Recording the suspend-point](#step-5-recording-the-suspend-point)
     - [Step 6: Implementing `coroutine_handle::resume()` and `coroutine_handle::destroy()`](#step-6-implementing-coroutine_handleresume-and-coroutine_handledestroy)
+    - [Step 7: Implementing `coroutine_handle<Promise>::promise()` and `from_promise()`](#step-7-implementing-coroutine_handlepromisepromise-and-from_promise)
+      - [1st](#1st)
+      - [2nd](#2nd)
+      - [3rd](#3rd)
+    - [Step 8: The beginnings of the coroutine body](#step-8-the-beginnings-of-the-coroutine-body)
+    - [Step 9: Lowering the co\_await expression](#step-9-lowering-the-co_await-expression)
+    - [Step 10: Implementing unhandled\_exception()](#step-10-implementing-unhandled_exception)
 
 ## Refs
 
@@ -2447,3 +2454,392 @@ namespace std {
 
 - `done()`方法通过检查`__resume`是否为`nullptr`，判断协程是否处于最终挂起点（即是否完成）。
 - 如果调用者尝试`resume()`处于最终挂起点的协程，会调用`nullptr`函数指针，导致程序崩溃（快速暴露错误，符合未定义行为的处理预期）。
+
+### Step 7: Implementing `coroutine_handle<Promise>::promise()` and `from_promise()`
+
+`coroutine_handle<void>`解决了**任意协程的统一操作接口**问题，但实际开发中，我们需要**关联到具体的Promise类型**（比如通过句柄获取Promise对象，或从Promise对象创建句柄）。
+
+`coroutine_handle<Promise>`作为特化版本，核心诉求是：
+
+1. **类型安全**：只能指向Promise类型为`Promise`的协程状态；
+2. **双向关联**：能从句柄获取Promise对象（`promise()`方法），也能从Promise对象创建句柄（`from_promise()`方法）；
+3. **复用逻辑**：尽可能复用`coroutine_handle<void>`的`resume()`/`destroy()`/`done()`实现，避免代码冗余。
+
+#### 1st
+
+为了让`coroutine_handle<Promise>`能统一访问任意协程状态中的Promise对象，我们需要一个**中间基类**，它继承自`__coroutine_state`（保留resume/destroy函数指针），并包含Promise对象的存储。
+
+```cpp
+// 继承自__coroutine_state，添加Promise对象的存储
+template<typename Promise>
+struct __coroutine_state_with_promise : __coroutine_state {
+    __coroutine_state_with_promise() noexcept {}
+    ~__coroutine_state_with_promise() {}
+
+    // 匿名union存储Promise对象：关键设计，见下文解释
+    union {
+        Promise __promise;
+    };
+};
+```
+
+为什么用**匿名union**存储`__promise`？
+
+这是整个设计中最关键的细节，核心原因是**控制Promise对象的构造顺序**。我们需要先回顾两个前提：
+
+- **前提1**：C++中，**派生类的成员会在基类成员之后构造**（基类构造函数先执行，然后是派生类的成员初始化，最后是派生类构造函数体）。
+- **前提2**：Promise对象的构造函数**可能需要引用协程的参数拷贝**（比如`promise(int& x)`），而参数拷贝是存储在**派生类的协程状态**中（比如`__g_state`的`x`成员）。
+
+如果直接将`__promise`作为基类的普通成员：
+
+```cpp
+// 错误设计：普通成员的Promise构造顺序过早
+template<typename Promise>
+struct __coroutine_state_with_promise : __coroutine_state {
+    Promise __promise; // 基类成员，会在派生类的参数拷贝之前构造
+};
+
+struct __g_state : __coroutine_state_with_promise<__g_promise_t> {
+    int x; // 派生类的参数拷贝，构造晚于__promise
+};
+```
+
+此时，Promise对象的构造函数会在参数拷贝（`x`）之前执行，无法引用还未构造的参数拷贝，导致逻辑错误。
+
+**匿名union的解决方案**：
+
+- 匿名union的成员**不会自动构造/析构**（union的默认行为），相当于只**预留了Promise对象的存储空间**，但控制权交给派生类；
+- 派生类可以在**参数拷贝构造完成后**，通过**原地new（placement new）**手动构造Promise对象；
+- 派生类析构时，也可以手动调用Promise的析构函数，保证析构顺序的正确性。
+
+简单来说，匿名union的作用是：**保留Promise对象的存储位置（基类中，保证偏移固定），但将构造/析构的时机控制权交给派生类**。
+
+#### 2nd
+
+将`__g_state`从直接继承`__coroutine_state`改为继承`__coroutine_state_with_promise<__g_promise_t>`，并手动构造/析构Promise对象。
+
+```cpp
+// 继承自__coroutine_state_with_promise<__g_promise_t>
+struct __g_state : __coroutine_state_with_promise<__g_promise_t> {
+    // 构造函数：参数拷贝后手动构造Promise
+    __g_state(int&& __x)
+    : x(static_cast<int&&>(__x)) { // 先构造参数拷贝x（派生类成员）
+        // 原地new：在基类的__promise存储区中构造Promise对象
+        // 此时x已经构造完成，可以安全传递引用给Promise的构造函数
+        ::new ((void*)std::addressof(this->__promise))
+            __g_promise_t(construct_promise<__g_promise_t>(x));
+    }
+
+    // 析构函数：手动析构Promise对象
+    ~__g_state() {
+        // 先析构Promise对象（可能依赖参数拷贝）
+        this->__promise.~__g_promise_t();
+        // 然后参数拷贝x会被自动析构（派生类成员的析构顺序与构造相反）
+    }
+
+    int __suspend_point = 0; // 挂起点编号
+    int x;                   // 协程参数拷贝
+    manual_lifetime<std::suspend_always> __tmp1; // 初始挂起点的临时对象
+    // to be filled out
+};
+```
+
+#### 3rd
+
+`coroutine_handle<Promise>`的实现核心是**复用`coroutine_handle<void>`的逻辑**，并添加`promise()`和`from_promise()`方法。
+
+```cpp
+namespace std {
+    template<typename Promise>
+    class coroutine_handle {
+        // 别名：简化基类指针的写法
+        using state_t = __coroutine_state_with_promise<Promise>;
+    public:
+        // 默认构造：空句柄
+        coroutine_handle() noexcept = default;
+        // 拷贝/赋值：浅拷贝指针（轻量级）
+        coroutine_handle(const coroutine_handle&) noexcept = default;
+        coroutine_handle& operator=(const coroutine_handle&) noexcept = default;
+
+        // 隐式转换为coroutine_handle<void>：支持统一接口调用
+        operator coroutine_handle<void>() const noexcept {
+            return coroutine_handle<void>::from_address(address());
+        }
+
+        // 判空：检查是否指向有效协程状态
+        explicit operator bool() const noexcept {
+            return state_ != nullptr;
+        }
+
+        // 相等比较：判断是否指向同一个协程状态
+        friend bool operator==(coroutine_handle a, coroutine_handle b) noexcept {
+            return a.state_ == b.state_;
+        }
+
+        // 转换为void*：复用coroutine_handle<void>的接口
+        void* address() const {
+            return static_cast<void*>(static_cast<__coroutine_state*>(state_));
+        }
+
+        // 从void*创建句柄：反向转换
+        static coroutine_handle from_address(void* ptr) {
+            coroutine_handle h;
+            // 先转换为基类__coroutine_state*，再向下转换为state_t*（类型安全）
+            h.state_ = static_cast<state_t*>(static_cast<__coroutine_state*>(ptr));
+            return h;
+        }
+
+        // 核心方法1：获取Promise对象的引用（类型安全）
+        Promise& promise() const {
+            return state_->__promise; // 直接访问基类中的__promise成员
+        }
+
+        // 核心方法2：从Promise对象创建句柄（双向关联的关键）
+        static coroutine_handle from_promise(Promise& promise) {
+            coroutine_handle h;
+
+            // 计算协程状态的地址：核心逻辑
+            // 步骤1：获取Promise对象的地址
+            unsigned char* promise_addr = reinterpret_cast<unsigned char*>(std::addressof(promise));
+            // 步骤2：减去__promise在state_t中的偏移量，得到协程状态的起始地址
+            unsigned char* state_addr = promise_addr - offsetof(state_t, __promise);
+            // 步骤3：转换为state_t*，赋值给句柄的state_
+            h.state_ = reinterpret_cast<state_t*>(state_addr);
+
+            return h;
+        }
+
+        // 复用coroutine_handle<void>的resume/destroy/done实现
+        void resume() const {
+            static_cast<coroutine_handle<void>>(*this).resume();
+        }
+
+        void destroy() const {
+            static_cast<coroutine_handle<void>>(*this).destroy();
+        }
+
+        bool done() const {
+            return static_cast<coroutine_handle<void>>(*this).done();
+        }
+
+    private:
+        state_t* state_ = nullptr; // 指向协程状态的基类指针（类型安全）
+    };
+}
+```
+
+### Step 8: The beginnings of the coroutine body
+
+为了让`coroutine_handle`的`resume()`/`destroy()`方法能调用到**当前协程专属的逻辑**，我们需要：
+
+1. 提前声明与`__coroutine_state`中函数指针类型匹配的`__g_resume`/`__g_destroy`函数；
+2. 在`__g_state`的构造函数中，将基类的`__resume`/`__destroy`指针绑定到这两个函数。
+
+```cpp
+// 1. 提前声明协程g专属的resume/destroy函数（匹配__coroutine_state的函数指针类型）
+void __g_resume(__coroutine_state* s);
+void __g_destroy(__coroutine_state* s);
+
+// 2. 在__g_state构造函数中绑定函数指针
+struct __g_state : __coroutine_state_with_promise<__g_promise_t> {
+    __g_state(int&& __x)
+    : x(static_cast<int&&>(__x)) {
+        // 绑定：基类的__resume指向__g_resume，__destroy指向__g_destroy
+        this->__resume = &__g_resume;
+        this->__destroy = &__g_destroy;
+
+        // 原地构造Promise对象（之前的逻辑，此处保留）
+        ::new ((void*)std::addressof(this->__promise))
+            __g_promise_t(construct_promise<__g_promise_t>(x));
+    }
+
+    // ... 其余成员省略
+};
+```
+
+之前的ramp函数在`else`分支（`await_ready()`返回`true`，协程不挂起）中只有注释，现在补充了**直接调用`__g_resume`**的逻辑，让协程体立即执行。
+
+```cpp
+task g(int x) {
+    std::unique_ptr<__g_state> state(new __g_state(static_cast<int&&>(x)));
+    decltype(auto) return_value = state->__promise.get_return_object();
+
+    state->__tmp1.construct_from([&]() -> decltype(auto) {
+        return state->__promise.initial_suspend();
+    });
+
+    if (!state->__tmp1.get().await_ready()) {
+        // 情况1：协程需要挂起（初始挂起点）
+        state->__tmp1.get().await_suspend(
+            std::coroutine_handle<__g_promise_t>::from_promise(state->__promise));
+        state.release(); // 释放所有权，协程保持挂起
+        // 直接返回，协程等待外部resume
+    } else {
+        // 情况2：协程不需要挂起（比如initial_suspend返回suspend_never）
+        // 调用__g_resume，传入release后的state（转移所有权，避免unique_ptr销毁）
+        __g_resume(state.release());
+    }
+
+    return return_value; // 返回协程的外部对象
+}
+```
+
+`__g_resume`是协程体执行的入口，核心逻辑是**根据挂起点编号（`__suspend_point`）跳转到对应的位置继续执行**。对于初始挂起点（编号0），需要完成`co_await`的最后两步：调用`await_resume()`和析构临时对象`__tmp1`。
+
+```cpp
+void __g_resume(__coroutine_state* s) {
+    // 类型转换：基类指针→派生类指针（确定是当前协程的状态）
+    auto* state = static_cast<__g_state*>(s);
+
+    // 跳转表：根据挂起点编号跳转到对应的执行位置（编译器生成的高效方式）
+    switch (state->__suspend_point) {
+    case 0: goto suspend_point_0; // 初始挂起点，跳转到对应标签
+    default: std::unreachable();  // 无效的挂起点，触发未定义行为（调试用）
+    }
+
+suspend_point_0: // 初始挂起点恢复后的执行位置
+    // 执行co_await的最后一步：await_resume()（std::suspend_always的该方法为空）
+    state->__tmp1.get().await_resume();
+    // 析构初始挂起点的临时对象__tmp1（生命周期结束）
+    state->__tmp1.destroy();
+
+    // TODO: 后续执行协程体的实际逻辑：
+    // int fx = co_await f(x);
+    // co_return fx * fx;
+}
+```
+
+`__g_destroy`负责协程被销毁时的**资源清理**，核心逻辑是根据挂起点编号，销毁当前存活的对象，最后释放协程状态的内存。对于初始挂起点（编号0），只需销毁临时对象`__tmp1`。
+
+```cpp
+void __g_destroy(__coroutine_state* s) {
+    auto* state = static_cast<__g_state*>(s);
+
+    // 跳转表：根据挂起点编号跳转到对应的清理位置
+    switch (state->__suspend_point) {
+    case 0: goto suspend_point_0;
+    default: std::unreachable();
+    }
+
+suspend_point_0: // 初始挂起点的清理逻辑
+    state->__tmp1.destroy(); // 销毁临时对象
+    goto destroy_state;      // 跳转到统一的内存释放逻辑
+
+    // TODO: 为其他挂起点添加对应的清理逻辑
+
+destroy_state: // 统一的协程状态释放逻辑
+    delete state; // 销毁协程状态对象（调用析构函数+释放内存）
+}
+```
+
+### Step 9: Lowering the co_await expression
+
+> **协程状态存储规则**：任何**生命周期跨越挂起点**的对象（局部变量、临时对象），必须存储在堆上的协程状态中；生命周期未跨越挂起点的对象，可作为普通局部变量存储在栈上。
+
+对于`co_await f(x);`这条语句，有两个临时对象的生命周期跨越了挂起点：
+
+1. **`f(x)`返回的`task`临时对象**：其生命周期持续到语句的分号处，而语句中包含`co_await`（挂起点），因此生命周期跨越挂起点。
+2. **`operator co_await()`返回的`task::awaiter`临时对象**：该对象用于执行`co_await`的三步方法，其生命周期从`operator co_await()`调用开始，到`await_resume()`执行后结束，跨越了挂起点。
+
+这两个对象无法存储在`__g_resume`的栈上（协程暂停后，栈帧会被销毁），因此需要用`manual_lifetime`（手动管理生命周期）封装后，存储在协程状态中。
+
+我们在`__g_state`中添加两个`manual_lifetime`成员，分别存储`task`和`task::awaiter`对象：
+
+```cpp
+struct __g_state : __coroutine_state_with_promise<__g_promise_t> {
+    __g_state(int&& __x);
+    ~__g_state();
+
+    int __suspend_point = 0;  // 挂起点编号
+    int x;                    // 协程参数拷贝
+    manual_lifetime<std::suspend_always> __tmp1; // 初始挂起点的临时对象
+    manual_lifetime<task> __tmp2;                // 存储f(x)返回的task对象
+    manual_lifetime<task::awaiter> __tmp3;       // 存储operator co_await()返回的awaiter对象
+};
+```
+
+`__g_resume`是协程体的执行入口，我们需要在其中实现`co_await`的三步核心方法，并处理挂起点的标记与恢复。代码的核心逻辑可拆分为**6个步骤**，以下是逐行解析：
+
+```cpp
+void __g_resume(__coroutine_state* s) {
+    auto* state = static_cast<__g_state*>(s);
+
+    // 步骤1：扩展跳转表，添加挂起点1的入口（对应co_await f(x)处）
+    switch (state->__suspend_point) {
+    case 0: goto suspend_point_0;  // 初始挂起点
+    case 1: goto suspend_point_1;  // co_await f(x)挂起点（新增）
+    default: std::unreachable();
+    }
+
+suspend_point_0:
+    // 初始挂起点的恢复逻辑（之前的代码）
+    state->__tmp1.get().await_resume();
+    state->__tmp1.destroy();
+
+    // 步骤2：构造__tmp2：执行f(x)，存储返回的task临时对象
+    state->__tmp2.construct_from([&] {
+        return f(state->x); // 原地构造task对象，利用保证拷贝省略
+    });
+
+    // 步骤3：构造__tmp3：调用task的operator co_await()，存储返回的awaiter对象
+    state->__tmp3.construct_from([&] {
+        // 将task对象转换为右值（operator co_await()通常为右值成员函数）
+        return static_cast<task&&>(state->__tmp2.get()).operator co_await();
+    });
+
+    // 步骤4：执行await_ready()，判断是否需要挂起
+    if (!state->__tmp3.get().await_ready()) {
+        // 步骤5：标记当前挂起点为1（协程暂停时，记录该编号）
+        state->__suspend_point = 1;
+
+        // 执行await_suspend()，传入当前协程句柄，获取返回的协程句柄h
+        auto h = state->__tmp3.get().await_suspend(
+            std::coroutine_handle<__g_promise_t>::from_promise(state->__promise));
+        
+        // 步骤6：恢复返回的协程句柄（await_suspend返回coroutine_handle的要求）
+        h.resume();
+        return; // 协程暂停，退出__g_resume
+    }
+
+suspend_point_1:
+    // 协程恢复时，执行await_resume()，获取返回值并赋值给fx
+    int fx = state->__tmp3.get().await_resume();
+    // 析构临时对象（顺序与构造相反，符合RAII规则）
+    state->__tmp3.destroy();
+    state->__tmp2.destroy();
+
+    // TODO: 执行co_return fx * fx;
+}
+```
+
+当协程在挂起点1被销毁（而非恢复）时，需要销毁`__tmp3`和`__tmp2`这两个临时对象，避免资源泄漏。我们扩展`__g_destroy`的跳转表并添加清理逻辑：
+
+```cpp
+void __g_destroy(__coroutine_state* s) {
+    auto* state = static_cast<__g_state*>(s);
+
+    // 扩展跳转表，添加挂起点1的入口
+    switch (state->__suspend_point) {
+    case 0: goto suspend_point_0;
+    case 1: goto suspend_point_1; // 新增：co_await f(x)挂起点
+    default: std::unreachable();
+    }
+
+suspend_point_0:
+    state->__tmp1.destroy();
+    goto destroy_state;
+
+suspend_point_1:
+    // 清理顺序：与构造相反，先析构__tmp3（awaiter），再析构__tmp2（task）
+    state->__tmp3.destroy();
+    state->__tmp2.destroy();
+    goto destroy_state;
+
+destroy_state:
+    delete state; // 释放协程状态内存
+}
+```
+
+So now we have finished implementing the statement: `int fx = co_await f(x);`
+
+### Step 10: Implementing unhandled_exception()
