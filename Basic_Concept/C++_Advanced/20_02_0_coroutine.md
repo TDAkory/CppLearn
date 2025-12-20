@@ -65,7 +65,10 @@
       - [3rd](#3rd)
     - [Step 8: The beginnings of the coroutine body](#step-8-the-beginnings-of-the-coroutine-body)
     - [Step 9: Lowering the co\_await expression](#step-9-lowering-the-co_await-expression)
-    - [Step 10: Implementing unhandled\_exception()](#step-10-implementing-unhandled_exception)
+    - [Step 10: Implementing `unhandled_exception()`](#step-10-implementing-unhandled_exception)
+    - [Step 11: Implementing `co_return`](#step-11-implementing-co_return)
+    - [Step 12: Implementing `final_suspend()`](#step-12-implementing-final_suspend)
+    - [Step 13: Implementing symmetric-transfer and the noop-coroutine](#step-13-implementing-symmetric-transfer-and-the-noop-coroutine)
 
 ## Refs
 
@@ -2367,6 +2370,7 @@ struct __g_state {
     int __suspend_point = 0;// 存储挂起点编号，初始化为0（初始挂起点）
     manual_lifetime<std::suspend_always> __tmp1; // 初始挂起点的临时对象
     // to be filled out
+};
 ```
 
 ### Step 6: Implementing `coroutine_handle::resume()` and `coroutine_handle::destroy()`
@@ -2842,4 +2846,336 @@ destroy_state:
 
 So now we have finished implementing the statement: `int fx = co_await f(x);`
 
-### Step 10: Implementing unhandled_exception()
+### Step 10: Implementing `unhandled_exception()`
+
+根据C++标准`[dcl.fct.def.coroutine]`，协程的函数体被编译器隐式替换为包含异常处理的结构，核心逻辑是：
+
+```cpp
+{
+    promise-type promise promise-constructor-arguments ;
+    try {
+        co_await promise.initial_suspend() ;
+        function-body
+    } catch ( ... ) {
+        if (!initial-await-resume-called)
+            throw ;
+        promise.unhandled_exception() ;
+    }
+final-suspend :
+    co_await promise.final_suspend() ;
+}
+```
+
+为了遵循标准，`__g_resume`函数做了两个关键设计：
+- **`switch+goto`放在`try`块内**：C++禁止用`goto`进入`try`块的作用域，因此将跳转表（挂起点跳转逻辑）放在`try`内部；
+- **`resume()`调用放在`try`块外**：`await_suspend()`返回的协程句柄的`resume()`若抛出异常，需传播到恢复当前协程的调用者，而非被当前协程的`catch`捕获。因此先将句柄暂存到外部变量，再通过`goto`跳转到`try`块外执行`resume()`。
+
+之前实现的`__g_resume`中存在bug，当`__tmp3.get().await_resume()`抛出异常时，代码会直接跳转到`catch`块，**`__tmp3`和`__tmp2`的`destroy()`方法不会被调用**，导致资源泄漏。
+
+`destructor_guard`是典型的RAII工具，其核心作用是：**在作用域退出时（无论正常退出还是异常退出）自动调用`manual_lifetime<T>::destroy()`，同时支持手动取消该行为**（协程挂起时需要保留对象）。
+
+```cpp
+template<typename T>
+struct destructor_guard {
+    // 关联到协程状态中的manual_lifetime对象
+    explicit destructor_guard(manual_lifetime<T>& obj) noexcept
+    : ptr_(std::addressof(obj)) {}
+
+    // 禁止移动：避免对象生命周期混乱
+    destructor_guard(destructor_guard&&) = delete;
+    destructor_guard& operator=(destructor_guard&&) = delete;
+
+    // 析构时自动调用destroy()（除非被cancel）
+    ~destructor_guard() noexcept(std::is_nothrow_destructible_v<T>) {
+        if (ptr_ != nullptr) {
+            ptr_->destroy();
+        }
+    }
+
+    // 取消析构：协程挂起时调用
+    void cancel() noexcept { ptr_ = nullptr; }
+
+private:
+    manual_lifetime<T>* ptr_;
+};
+
+// 偏特化优化：平凡析构类型无需处理
+template<typename T>
+    requires std::is_trivially_destructible_v<T>
+struct destructor_guard<T> {
+    explicit destructor_guard(manual_lifetime<T>&) noexcept {}
+    void cancel() noexcept {}
+};
+
+// 类模板参数推导：简化使用
+template<typename T>
+destructor_guard(manual_lifetime<T>& obj) -> destructor_guard<T>;
+```
+
+```cpp
+void __g_resume(__coroutine_state* s) {
+    auto* state = static_cast<__g_state*>(s);
+
+    std::coroutine_handle<void> coro_to_resume;
+
+    try {
+        switch (state->__suspend_point) {
+        case 0: goto suspend_point_0;
+        case 1: goto suspend_point_1; // <-- add new jump-table entry
+        default: std::unreachable();
+        }
+
+suspend_point_0:
+        {
+            destructor_guard tmp1_dtor{state->__tmp1};
+            state->__tmp1.get().await_resume();
+        }
+
+        //  int fx = co_await f(x);
+        {
+            state->__tmp2.construct_from([&] {
+                return f(state->x);
+            });
+            destructor_guard tmp2_dtor{state->__tmp2};
+
+            state->__tmp3.construct_from([&] {
+                return static_cast<task&&>(state->__tmp2.get()).operator co_await();
+            });
+            destructor_guard tmp3_dtor{state->__tmp3};
+
+            if (!state->__tmp3.get().await_ready()) {
+                state->__suspend_point = 1;
+
+                coro_to_resume = state->__tmp3.get().await_suspend(
+                    std::coroutine_handle<__g_promise_t>::from_promise(state->__promise));
+
+                // A coroutine suspends without exiting scopes.
+                // So cancel the destructor-guards.
+                tmp3_dtor.cancel();
+                tmp2_dtor.cancel();
+
+                goto resume_coro;
+            }
+
+            // Don't exit the scope here.
+            //
+            // We can't 'goto' a label that enters the scope of a variable with a
+            // non-trivial destructor. So we have to exit the scope of the destructor
+            // guards here without calling the destructors and then recreate them after
+            // the `suspend_point_1` label.
+            tmp3_dtor.cancel();
+            tmp2_dtor.cancel();
+        }
+
+suspend_point_1:
+        int fx = [&]() -> decltype(auto) {
+            destructor_guard tmp2_dtor{state->__tmp2};
+            destructor_guard tmp3_dtor{state->__tmp3};
+            return state->__tmp3.get().await_resume();
+        }();
+
+        // TODO: Implement
+        //  co_return fx * fx;
+    } catch (...) {
+        state->__promise.unhandled_exception();
+        goto final_suspend;
+    }
+
+final_suspend:
+    // TODO: Implement
+    // co_await promise.final_suspend();
+
+resume_coro:
+    coro_to_resume.resume();
+    return;
+}
+```
+
+如果`promise.unhandled_exception()`方法本身抛出异常（比如重抛当前异常），需要额外处理：
+
+```cpp
+// 修改`catch`块逻辑
+catch (...) {
+    try {
+        state->__promise.unhandled_exception();
+    } catch (...) {
+        // 标记为最终挂起点：__resume设为null（让done()返回true）
+        state->__suspend_point = 2;
+        state->__resume = nullptr;
+        throw; // 重抛异常到调用者
+    }
+    goto final_suspend;
+}
+```
+
+```cpp
+// 更新`__g_destroy`的跳转表
+switch (state->__suspend_point) {
+case 0: goto suspend_point_0;
+case 1: goto suspend_point_1;
+case 2: goto destroy_state; // 无对象需要析构，直接释放协程状态
+default: std::unreachable();
+}
+```
+
+### Step 11: Implementing `co_return`
+
+`co_return <expr>` 被替换为
+
+```cpp
+promise.return_value(<expr>);
+goto final-suspend-point;
+```
+
+因此有
+
+```cpp
+void __g_resume(__coroutine_state* s) {
+    auto* state = static_cast<__g_state*>(s);
+
+    std::coroutine_handle<void> coro_to_resume;
+
+    try {
+    
+    // ……
+
+    suspend_point_1:
+        int fx = [&]() -> decltype(auto) {
+            destructor_guard tmp2_dtor{state->__tmp2};
+            destructor_guard tmp3_dtor{state->__tmp3};
+            return state->__tmp3.get().await_resume();
+        }();
+
+        // 实现 co_return fx * fx;
+        state->__promise.return_value(fx * fx); // 步骤1：调用Promise的return_value
+        goto final_suspend; // 步骤2：跳转到最终挂起点
+
+    } catch (...) {
+        state->__promise.unhandled_exception();
+        goto final_suspend;
+    }
+
+final_suspend:
+    // TODO: Implement co_await promise.final_suspend();
+
+resume_coro:
+    coro_to_resume.resume();
+    return;
+}
+```
+
+### Step 12: Implementing `final_suspend()`
+
+`final_suspend()`是协程执行的**最后一个挂起点**，其核心作用是：
+
+1. **协程收尾的钩子**：允许Promise在协程执行完毕后执行自定义逻辑（比如通知调用者协程完成、链式执行下一个协程）；
+2. **资源管理的最后机会**：协程在最终挂起点暂停后，需由外部调用`coroutine_handle::destroy()`来清理资源，而非自动销毁（这是与初始挂起点的关键区别）。
+
+`promise.final_suspend()`返回的`final_awaiter`临时对象的生命周期跨越最终挂起点，因此需要用`manual_lifetime`封装后存储在协程状态中
+
+`final_awaiter`没有自己的`operator co_await()`，因此无需额外存储其他临时对象，只需这一个成员即可。
+
+```cpp
+struct __g_state : __coroutine_state_with_promise<__g_promise_t> {
+    __g_state(int&& __x);
+    ~__g_state();
+
+    int __suspend_point = 0;  // 挂起点编号
+    int x;                    // 协程参数拷贝
+    manual_lifetime<std::suspend_always> __tmp1; // 初始挂起点的awaiter
+    manual_lifetime<task> __tmp2;                // f(x)返回的task
+    manual_lifetime<task::awaiter> __tmp3;       // task的awaiter
+    // 新增：存储final_suspend()返回的final_awaiter对象
+    manual_lifetime<task::promise_type::final_awaiter> __tmp4;
+};
+```
+
+我们在`final_suspend`标签处完成`co_await promise.final_suspend()`的三步执行逻辑，同时处理最终挂起点的标记和协程状态的销毁：
+
+```cpp
+void __g_resume(__coroutine_state* s) {
+    auto* state = static_cast<__g_state*>(s);
+    std::coroutine_handle<void> coro_to_resume;
+
+    try {
+        // ... 之前的协程体逻辑（初始挂起点、co_await f(x)） ...
+
+    } catch (...) {
+        state->__promise.unhandled_exception();
+        goto final_suspend;
+    }
+
+final_suspend:
+    // 实现 co_await promise.final_suspend();
+    {
+        // 步骤1：构造final_awaiter对象（noexcept，无需处理异常）
+        state->__tmp4.construct_from([&]() noexcept {
+            return state->__promise.final_suspend();
+        });
+        // 步骤2：用RAII guard管理final_awaiter的析构
+        destructor_guard tmp4_dtor{state->__tmp4};
+
+        // 步骤3：执行await_ready()，判断是否需要挂起
+        if (!state->__tmp4.get().await_ready()) {
+            // 标记为最终挂起点（编号2）
+            state->__suspend_point = 2;
+            // 关键：将__resume设为nullptr，让coroutine_handle::done()返回true
+            state->__resume = nullptr;
+
+            // 步骤4：执行await_suspend()，获取返回的协程句柄
+            coro_to_resume = state->__tmp4.get().await_suspend(
+                std::coroutine_handle<__g_promise_t>::from_promise(state->__promise));
+
+            // 协程挂起：取消guard的析构（保留final_awaiter到销毁时）
+            tmp4_dtor.cancel();
+            // 跳转到resume_coro，执行返回句柄的resume()
+            goto resume_coro;
+        }
+
+        // 步骤5：若未挂起，执行await_resume()
+        state->__tmp4.get().await_resume();
+        // 作用域结束，tmp4_dtor自动析构final_awaiter
+    }
+
+    // 步骤6：若执行到这里，说明协程未在最终挂起点挂起，自动销毁协程状态
+    delete state;
+    return;
+// ……
+}
+```
+
+当协程在最终挂起点（编号2）被销毁时，需要析构`__tmp4`（`final_awaiter`对象），因此扩展`__g_destroy`的跳转表：
+
+```cpp
+void __g_destroy(__coroutine_state* s) {
+    auto* state = static_cast<__g_state*>(s);
+
+    // 扩展跳转表，添加挂起点2的入口
+    switch (state->__suspend_point) {
+    case 0: goto suspend_point_0;
+    case 1: goto suspend_point_1;
+    case 2: goto suspend_point_2; // 最终挂起点
+    default: std::unreachable();
+    }
+
+suspend_point_0:
+    state->__tmp1.destroy();
+    goto destroy_state;
+
+suspend_point_1:
+    state->__tmp3.destroy();
+    state->__tmp2.destroy();
+    goto destroy_state;
+
+suspend_point_2:
+    // 析构final_awaiter对象
+    state->__tmp4.destroy();
+    goto destroy_state;
+
+destroy_state:
+    // 释放协程状态内存
+    delete state;
+}
+```
+
+### Step 13: Implementing symmetric-transfer and the noop-coroutine
