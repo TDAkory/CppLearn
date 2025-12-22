@@ -1,5 +1,7 @@
-一、AVX2 世界观：256 位寄存器与 Lanes
-欢迎来到 AVX2（Advanced Vector Extensions 2）的并行世界。简单来说，AVX2 允许 CPU 在一条指令里同时操作多个数据，就像用一辆大卡车一次运送一堆包裹，而不是一次只运一个。这种技术被称为 SIMD（Single Instruction, Multiple Data）。
+# Typical Intel AVX2 intrinsics with graphs
+
+简单来说，AVX2 允许 CPU 在一条指令里同时操作多个数据，就像用一辆大卡车一次运送一堆包裹，而不是一次只运一个。这种技术被称为 SIMD（Single Instruction, Multiple Data）。
+
 理解 AVX2 的核心在于理解它的“卡车”——256 位 YMM 寄存器。你可以把一个 YMM 寄存器想象成一个能装 32 个字节（256 位）的大盒子。为了管理方便，这个大盒子在逻辑上被分成两个 128 位的小隔间，我们称之为 lane（车道）。
 - YMM 寄存器：一个 256 位的容器。
 - Lane：YMM 寄存器内部的两个 128 位分区（Lane 0 和 Lane 1）。
