@@ -257,7 +257,7 @@
 - a simple c++ runtime lib
 - Rust leveldb-rs
 
-### [blog topics](../BlogSrc/README.md)
+### [blog topics](BlogSrcREADME.md)
 
 ## 交流语言
 
