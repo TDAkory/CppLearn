@@ -1,0 +1,17 @@
+# Table of contents
+
+* [../ (meta_programming)](../metaprogrammingINDEX.md)
+* [01_method_template.md](01_method_template.md)
+* [02_class_template.md](02_class_template.md)
+* [03_template_non-type_parameter.md](03_template_non-type_parameter.md)
+* [04_some_template_skill.md](04_some_template_skill.md)
+* [05_template_on_hand.md](05_template_on_hand.md)
+* [06_template_go_deep.md](06_template_go_deep.md)
+* [07_name_in_template.md](07_name_in_template.md)
+* [08_instantiation.md](08_instantiation.md)
+* [09_template_argument_deduction.md](09_template_argument_deduction.md)
+* [10_specialization_and_overloading.md](10_specialization_and_overloading.md)
+* [11_future_direction.md](11_future_direction.md)
+* [12_polymorphic_power.md](12_polymorphic_power.md)
+* [13_trait_and_policy_class.md](13_trait_and_policy_class.md)
+* [README.md](README.md)

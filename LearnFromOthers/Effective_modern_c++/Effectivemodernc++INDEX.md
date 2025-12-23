@@ -1,0 +1,16 @@
+# Table of contents
+
+* [../ (LearnFromOthers)](../LearnFromOthersINDEX.md)
+* [1_deducing_type](1_deducing_type/README.md)
+  * [README.md](1_deducing_type/README.md)
+  * [decltype.md](1_deducing_type/decltype.md)
+  * [know-how-to-view-deduced-types.md](1_deducing_type/know-how-to-view-deduced-types.md)
+  * [understand-auto-type-deduction.md](1_deducing_type/understand-auto-type-deduction.md)
+  * [understand_template_type_deduction.md](1_deducing_type/understand_template_type_deduction.md)
+* [2_auto](2_auto/README.md)
+  * [1_prefer_auto_to_explicit_type_declarations.md](2_auto/1_prefer_auto_to_explicit_type_declarations.md)
+  * [2_auto_deduces_undesired_types.md](2_auto/2_auto_deduces_undesired_types.md)
+  * [readme.md](2_auto/readme.md)
+* [3_move_to_modern_cpp](3_move_to_modern_cpp/README.md)
+  * [README.md](3_move_to_modern_cpp/README.md)
+* [README.md](README.md)
