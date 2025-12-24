@@ -8,6 +8,7 @@
     - [Http Headers used by Libcurl](#http-headers-used-by-libcurl)
   - [Topics](#topics)
     - [libcurl与连接池](#libcurl与连接池)
+    - [`curl_socketpair`](#curl_socketpair)
   - [参考资料](#参考资料)
 
 
@@ -95,6 +96,33 @@ Libcurl针对tcp连接采用了连接池管理，一次传输完成后，它将�
 使用multi API时，连接池将与multi句柄相关联。这允许您自由地清理和重新创建easy句柄，而不会有丢失连接池的风险，并且允许一个easy句柄使用的连接在以后的传输中被另一个简单句柄重用。只需重用multi句柄。
 
 从libcurl 7.57.0开始，应用程序可以使用 share interface，以使其他独立的传输共享同一连接池。
+
+### `curl_socketpair`
+
+是 libcurl 内部使用的一个函数，主要用于创建**套接字对（socket pair）**。
+
+**线程间通信**，当 libcurl 需要在线程间传递信号或数据时，会创建一对相互连接的套接字：
+
+**唤醒事件循环**，在多路复用（multiplexing）场景中
+
+```c
+// 内部简化示例
+curl_socket_t socks[2];
+curl_socketpair(AF_UNIX, SOCK_STREAM, 0, socks);
+
+// 将一个套接字加入多路复用监控
+curl_multi_assign(multi_handle, socks[0], some_data);
+
+// 需要唤醒时，向 socks[1] 写入数据
+write(socks[1], "wake", 4);
+```
+
+**超时机制实现**，实现超时控制：
+
+- 创建套接字对
+- 设置超时时间
+- 使用 `select()`/`poll()` 监控套接字
+- 超时发生时写入数据触发
 
 ## 参考资料
 

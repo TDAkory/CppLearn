@@ -63,3 +63,267 @@ Send packet CA->Netherlands->CA      150,000,000 ns
 6. **收集硬件性能计数器剖面**：借助`perf`等工具收集基于硬件性能计数器的剖面，定位到**缓存未命中率高的函数**，针对性优化。
 
 ## API considerations
+
+### API设计的通用核心原则
+
+1. **封装内优化，避免破坏公共接口**：性能优化优先在代码封装边界内完成（如类/模块内部），不改动对外接口；模块设计遵循“深而窄”（窄接口承载多核心功能），更容易实现这种无侵入式优化。
+2. **谨慎新增API功能**：广泛使用的API新增功能会限制后续实现灵活性，还会给不需要该功能的用户增加无意义成本（如C++标准库容器的“迭代器稳定性”承诺，导致额外内存分配，多数用户并不需要）。
+3. **权衡性能与易用性**：所有优化技巧需评估“性能收益”是否大于“API易用性损耗”，避免为了性能过度复杂化接口。
+
+### 关键性能优化技巧
+
+#### 1. 批量API（Bulk APIs）—— 摊销高频开销
+
+减少API边界的昂贵开销（如锁、RPC、内存分配），或利用算法级优化（批量操作往往比逐次操作复杂度更低）。
+
+- 新增`MemoryManager::LookupMany`：批量查询接口，且简化返回值（bool替代Status），贴合客户端实际需求；
+- 新增`ObjectStore::DeleteRefs`：批量删除引用，单次加锁处理所有删除请求，摊销锁开销（对比逐次调用`DeleteRef`多次加锁）；
+
+```cpp
+// old impl
+template <typename T>
+class ObjectStore {
+ public:
+  ...
+  absl::Status DeleteRef(Ref);
+// new impl
+template <typename T>
+class ObjectStore {
+ public:
+  ...
+  absl::Status DeleteRef(Ref);
+
+  // Delete many references.  For each ref, if no other Refs point to the same
+  // object, the object will be deleted.  Returns non-OK on any error.
+  absl::Status DeleteRefs(absl::Span<const Ref> refs);
+  ...
+template <typename T>
+absl::Status ObjectStore<T>::DeleteRefs(absl::Span<const Ref> refs) {
+  util::Status result;
+  absl::MutexLock l(&mu_);
+  for (auto ref : refs) {
+    result.Update(DeleteRefLocked(ref));
+  }
+  return result;
+}
+```
+
+- 算法级批量优化：用Floyd堆构造法批量初始化堆（O(N)时间，远优于逐元素添加的O(N logN)）；
+- 间接批量优化：内部缓存批量处理结果（如`lexicon.cc`缓存块解码结果，供后续非批量调用复用，避免重复解码）。(Sometimes it is hard to change callers to use a new bulk API directly. In that case it might be beneficial to use a bulk API internally and cache the results for use in future non-bulk API calls)
+
+```cpp
+// old impl
+void GetTokenString(int pos, std::string* out) const {
+  ...
+  absl::FixedArray<LexiconEntry, 32> entries(pos + 1);
+
+  // Decode all lexicon entries up to and including pos.
+  for (int i = 0; i <= pos; ++i) {
+    p = util::coding::TwoValuesVarint::Decode32(p, &entries[i].remaining,
+                                                &entries[i].shared);
+    entries[i].remaining_str = p;
+    p += entries[i].remaining;  // remaining bytes trail each entry.
+  }
+mutable std::vector<absl::InlinedVector<std::string, 16>> cache_;
+
+// new impl
+void GetTokenString(int pos, std::string* out) const {
+  ...
+  DCHECK_LT(skentry, cache_.size());
+  if (!cache_[skentry].empty()) {
+    *out = cache_[skentry][pos];
+    return;
+  }
+  ...
+  // Init cache.
+  ...
+  const char* prev = p;
+  for (int i = 0; i < block_sz; ++i) {
+    uint32 shared, remaining;
+    p = TwoValuesVarint::Decode32(p, &remaining, &shared);
+    auto& cur = cache_[skentry].emplace_back();
+    gtl::STLStringResizeUninitialized(&cur, remaining + shared);
+
+    std::memcpy(cur.data(), prev, shared);
+    std::memcpy(cur.data() + shared, p, remaining);
+    prev = cur.data();
+    p += remaining;
+  }
+  *out = cache_[skentry][pos];
+```
+
+#### 2. 视图类型（View types）—— 减少拷贝，兼容多容器
+
+避免函数参数的不必要数据拷贝，同时兼容调用方的不同容器类型。函数参数优先使用视图类型（`std::string_view`、`std::Span<T>`、`absl::FunctionRef`），仅在需要转移数据所有权时例外；调用方可灵活选择容器（如`std::vector`/`absl::InlinedVector`），无需适配API的容器类型，且无拷贝开销。
+
+#### 3. 预分配/预计算参数 —— 避免重复计算/分配
+
+针对高频调用的函数，允许上层调用方传入已拥有的数据源或已计算的信息，避免底层函数重复分配临时结构、重复计算。
+
+#### 4. 线程兼容 vs 线程安全类型 —— 按需承担同步开销
+
+通用类型默认设计为“线程兼容”（依赖外部同步），让不需要线程安全的调用方避免承担锁等同步开销；
+
+**例外场景**：若类型的“典型使用场景”需要同步，则将同步逻辑内置到类型中。可灵活调整同步机制（如分片锁减少竞争），且不影响调用方代码。
+
+## Algorithmic improvements
+
+算法级优化是性能提升的核心手段，收益远大于参数调优、硬件升级等，核心逻辑是降低算法 / 数据结构的渐近复杂度（如 O (N²)→O (N)、O (logN)→O (1)），或利用算法特性简化核心逻辑
+
+1. **优先降低渐近复杂度**：
+   这是最核心的优化（如 O(N²)→O(N)、O(logN)→O(1)），收益远大于常数级调优（如循环展开、缓存优化）。
+2. **数据结构匹配场景**：
+   避免“过度设计”（如用 IntervalMap 解决简单合并问题），选择“刚好满足需求”的高效结构（如哈希表）。
+3. **利用算法特性简化逻辑**：
+   如循环检测利用拓扑排序的 rank 对比，将复杂校验转化为简单数值比较。
+4. **哈希表需配高质量哈希函数**：
+   哈希表的 O(1) 是“平均复杂度”，低质量哈希会导致冲突，退化为 O(N)。
+5. **空间换时间（稀疏场景友好）**：
+   如死锁检测用 O(|V|+|E|) 空间换 O(1) 时间，稀疏图下空间成本可控，时间收益显著。
+6. **避免人工限制**：
+   旧死锁检测的 2K 限制是“性能妥协”，新算法突破限制后，既提升性能又暴露潜在问题。
+
+## Better memory representation
+
+优化重要数据结构的内存占用与缓存占用，减少缓存未命中、降低内存总线流量，提升程序及同主机其他程序的性能。
+
+1. **紧凑数据结构**
+   - 做法：为高频访问/占应用内存比例大的数据采用紧凑表示，降低内存使用、减少缓存行访问；
+   - 注意：需警惕缓存行竞争。
+
+2. **内存布局优化**
+   - 重排字段，减少不同对齐要求字段间的填充；
+   - 按需使用更小的数值类型（如枚举指定`enum class OpType : uint8_t`）；
+   - 高频共访字段相邻摆放，减少常见操作的缓存行访问数；
+   - 热只读字段与热可变字段分离，避免写操作驱逐只读字段出缓存；
+   - 冷数据移至结构体末尾/通过间接寻址存放/放入独立数组，远离热数据；
+   - 位/字节级编码压缩内存占用（仅在数据封装于测试充分的模块、内存节省效果显著时使用）；
+   - 注意：位/字节编码可能导致高频数据对齐不足、访问代码开销增加，需通过基准测试验证。
+
+3. **索引替代指针**
+   - 做法：64位机器中，用数组整数索引（32位及以下）替代`T*`指针，数组元素连续存储提升缓存局部性。
+
+4. **批量存储**
+   - 做法：避免单元素单独分配（如`std::map`/`std::unordered_map`），改用分块/扁平存储结构（如`std::vector`、`absl::flat_hash_{map,set}`），降低分配器开销、优化缓存表现；可将元素分固定大小块存储（字符串、向量、`absl::flat_hash_map`均采用此思路）。
+
+5. **内联存储**
+   - 做法：使用为少量元素优化的容器（如`InlinedVector`），顶层预留小空间，元素少则无需分配；
+   - 注意：`sizeof(T)`较大时不适用，内联存储会导致体积过大。
+
+6. **消除不必要的嵌套映射**
+   - 做法：将嵌套映射（如`btree<a,btree<b,c>>`）替换为复合键单层映射（`btree<pair<a,b>,c>`），降低查找/插入成本；
+   - 注意：首个映射键较大时，嵌套映射可能性能更优（需要性能测试来证明）。
+
+7. **内存池（Arenas）**
+   - 做法：降低内存分配成本，将独立分配项紧凑存储以减少缓存行占用，消除大部分销毁成本（对多子对象的复杂结构效果显著）；建议设置初始大小减少分配；
+   - 注意：短生命周期对象放入长生命周期内存池易导致内存膨胀。
+
+8. **数组替代映射**
+   - 做法：映射键为小整数/枚举、或元素极少时，用数组/向量替代映射（如替代`flat_map`）。
+
+```cpp
+// old impl
+const gtl::flat_map<int, int> payload_type_to_clock_frequency_;
+// new impl
+// A map (implemented as a simple array) indexed by payload_type to clock freq
+// for that paylaod type (or 0)
+struct PayloadTypeToClockRateMap {
+  int map[128];
+};
+...
+const PayloadTypeToClockRateMap payload_type_to_clock_frequency_;
+```
+
+9. **位向量替代集合**
+   - 做法：集合域为小整数时，用位向量（如`InlinedBitVector`）替代集合（案例：Spanner用位向量替代`dense_hash_set<ZoneId>`、位矩阵替代哈希表跟踪操作数可达性）；位运算（OR/AND等）可高效实现集合操作。
+
+```cpp
+// old impl
+class ZoneSet: public dense_hash_set<ZoneId> {
+ public:
+  ...
+  bool Contains(ZoneId zone) const {
+    return count(zone) > 0;
+  }
+
+// new impl
+class ZoneSet {
+  ...
+  // Returns true iff "zone" is contained in the set
+  bool ContainsZone(ZoneId zone) const {
+    return zone < b_.size() && b_.get_bit(zone);
+  }
+  ...
+ private:
+  int size_;          // Number of zones inserted
+  util::bitmap::InlinedBitVector<256> b_;
+```
+
+## Reduce allocations
+
+内存分配会产生三类成本：
+
+1. 增加分配器执行耗时；
+2. 新分配对象需高开销初始化，不再使用时可能伴随高开销销毁；
+3. 每次分配通常对应新缓存行，多独立分配的数据缓存占用远大于少分配的数据（垃圾回收运行时可通过连续内存放置连续分配对象缓解此问题）。
+
+具体优化手段
+
+1. **避免不必要的分配**
+   - 收益：减少分配可使基准测试吞吐量提升21%；
+   - 做法：尽可能使用静态分配的零向量，而非分配向量后填充零；对象生命周期限于作用域时优先栈分配（需注意大对象的栈帧大小）。
+
+2. **调整/预留容器大小**
+   - 做法：提前知晓向量（或其他容器）最大/预期最大尺寸时，预调整底层存储（如C++的`resize`/`reserve`）；预分配向量并填充，而非执行N次`push_back`；
+   - 注意：避免逐元素`resize`/`reserve`（易导致平方级性能损耗）；元素构造开销高时，优先先`reserve`再多次`push_back`/`emplace_back`，而非初始`resize`（后者会使构造函数调用次数翻倍）。
+
+3. **尽可能避免拷贝**
+   - 做法：优先移动而非拷贝数据结构；生命周期无问题时，临时数据结构中存储指针/索引而非对象拷贝（如本地映射存储传入proto的指针、排序索引向量而非大对象向量）；接收gRPC张量时避免额外拷贝；移动大选项结构而非拷贝；使用`std::sort`替代`std::stable_sort`（避免稳定排序的内部拷贝）。
+
+4. **复用临时对象**
+   - 做法：将循环内声明的容器/对象移至循环外（编译器常因语言语义/无法确保程序等价性无法自动优化），如循环外定义protobuf变量以复用存储、重复序列化至同一`std::string`；
+   - 注意：protobuf、字符串、向量等容器会增长至存储过的最大尺寸，需定期重建（如每N次使用后），以降低内存占用和重新初始化成本。
+
+## Avoid unnecessary work
+
+避免无需执行的工作是提升性能的核心手段之一，具体通过为常见场景设计专用路径、预计算、延迟计算、代码特化、缓存等方式实现，同时兼顾编译器优化、统计成本控制、热路径日志管控。
+
+1. **为常见场景设计快速路径**：代码常覆盖全量场景，但部分常见场景逻辑更简单，可针对性优化且不显著影响罕见场景性能；
+
+2. **预计算高开销信息**（仅执行一次）：在模块边界检查输入格式是否错误，而非内部重复校验。
+
+3. **将高开销计算移出循环**
+
+4. **延迟高开销计算**
+
+```cpp
+// Preallocate 10 nodes not 200 for query handling in Google's web server.
+// A simple change that reduced web server's CPU usage by 7.5%.
+
+//querytree.h
+
+static const int kInitParseTreeSize = 200;   // initial size of querynode pool
+static const int kInitParseTreeSize = 10;   // initial size of querynode pool
+```
+
+5. **代码特化**：性能敏感调用点无需通用库的完整功能时，编写特化代码替代通用代码；
+
+6. **利用缓存避免重复工作**
+
+7. **简化编译器工作**（辅助优化）：编译器因抽象层/保守假设难以优化，开发者可底层改写辅助（仅在性能分析显示问题时操作，可通过pprof查看关键代码汇编确认优化效果）；
+
+- 热函数中避免函数调用（减少栈帧创建成本）；
+- 将慢路径代码移至独立尾调用函数；
+- 大量使用前将少量数据拷贝至局部变量（消除别名，提升自动向量化和寄存器分配）；
+- 手动展开极热循环；
+
+1. **降低统计收集成本**：平衡统计信息的效用与维护成本
+
+- 移除无用统计（如停止维护SelectServer中告警和闭包数量的高开销统计）；
+- 仅对部分元素（RPC请求、输入记录等）采样维护统计（如tcmalloc分配跟踪、/requestz状态页、Dapper采样）；
+- 适当降低采样率（如仅对部分文档信息请求维护统计、降低采样率并加快采样决策）。
+
+9. **避免热代码路径中的日志**：日志语句即使未实际输出也有开销（如ABSL_VLOG的加载+比较），还可能抑制编译器优化；
+
+
+## Code size considerations
