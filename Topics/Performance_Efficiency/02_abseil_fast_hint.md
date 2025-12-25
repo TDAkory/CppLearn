@@ -325,5 +325,186 @@ static const int kInitParseTreeSize = 10;   // initial size of querynode pool
 
 9. **避免热代码路径中的日志**：日志语句即使未实际输出也有开销（如ABSL_VLOG的加载+比较），还可能抑制编译器优化；
 
-
 ## Code size considerations
+
+性能不仅包含运行时速度，代码体积过大还会引发一系列问题：编译/链接耗时增加、二进制文件臃肿、内存占用上升、指令缓存（icache）压力增大，甚至影响分支预测器等微架构结构；该问题在C++中因过度使用模板和内联尤为突出，编写多场景复用的底层库代码、或会被多类型实例化的模板代码时，需重点考量代码体积。
+
+1. **精简高频内联代码**：广泛调用的函数若过度内联，会显著增加代码体积；这段代码能实现 **4.5倍性能提升+代码体积缩减**，核心是通过**减少冗余代码、降低运行时开销、优化指令缓存（icache）效率**实现的，具体从3个关键优化点分析：
+
+```cpp
+// old impl
+struct CheckOpString {
+  CheckOpString(string* str) : str_(str) { }
+  ~CheckOpString() { delete str_; }
+  operator bool() const { return str_ == NULL; }
+  string* str_;
+};
+...
+#define DEFINE_CHECK_OP_IMPL(name, op) \
+  template <class t1, class t2> \
+  inline string* Check##name##Impl(const t1& v1, const t2& v2, \
+                                   const char* names) { \
+    if (v1 op v2) return NULL; \
+    else return MakeCheckOpString(v1, v2, names); \
+  } \
+  string* Check##name##Impl(int v1, int v2, const char* names);
+DEFINE_CHECK_OP_IMPL(EQ, ==)
+DEFINE_CHECK_OP_IMPL(NE, !=)
+DEFINE_CHECK_OP_IMPL(LE, <=)
+DEFINE_CHECK_OP_IMPL(LT, < )
+DEFINE_CHECK_OP_IMPL(GE, >=)
+DEFINE_CHECK_OP_IMPL(GT, > )
+#undef DEFINE_CHECK_OP_IMPL
+
+// new impl
+struct CheckOpString {
+  CheckOpString(string* str) : str_(str) { }
+  // No destructor: if str_ is non-NULL, we're about to LOG(FATAL),
+  // so there's no point in cleaning up str_.
+  operator bool() const { return str_ == NULL; }
+  string* str_;
+};
+...
+extern string* MakeCheckOpStringIntInt(int v1, int v2, const char* names);
+
+template<int, int>
+string* MakeCheckOpString(const int& v1, const int& v2, const char* names) {
+  return MakeCheckOpStringIntInt(v1, v2, names);
+}
+...
+#define DEFINE_CHECK_OP_IMPL(name, op) \
+  template <class t1, class t2> \
+  inline string* Check##name##Impl(const t1& v1, const t2& v2, \
+                                   const char* names) { \
+    if (v1 op v2) return NULL; \
+    else return MakeCheckOpString(v1, v2, names); \
+  } \
+  inline string* Check##name##Impl(int v1, int v2, const char* names) { \
+    if (v1 op v2) return NULL; \
+    else return MakeCheckOpString(v1, v2, names); \
+  }
+DEFINE_CHECK_OP_IMPL(EQ, ==)
+DEFINE_CHECK_OP_IMPL(NE, !=)
+DEFINE_CHECK_OP_IMPL(LE, <=)
+DEFINE_CHECK_OP_IMPL(LT, < )
+DEFINE_CHECK_OP_IMPL(GE, >=)
+DEFINE_CHECK_OP_IMPL(GT, > )
+#undef DEFINE_CHECK_OP_IMPL
+```
+
+- **移除不必要的析构开销**：旧代码中`CheckOpString`类有析构函数，新代码直接删除了这个析构函数，并注释说明：**当`str_`非空时，程序会执行`LOG(FATAL)`终止，无需清理`str_`**。
+
+- **避免模板的“重复实例化冗余**”：旧代码中`MakeCheckOpString`是**全模板实现**，对于最常见的`int-int`类型比较（`CHECK_GE(int, int)`），每次调用都会**重复实例化模板**，生成完全相同的代码（每个调用点都有一份模板实例化的副本）。
+
+- 新代码将`int-int`场景抽离为**外部共享函数**：所有`int-int`类型的`CHECK_GE`调用，都会复用同一个`MakeCheckOpStringIntInt`函数实现，不再生成多份模板实例化的冗余代码；
+
+2. **谨慎内联**：内联虽可能提升性能，但也可能无对应收益却增加代码体积（甚至因指令缓存压力导致性能下降）；
+
+3. **减少模板实例化**：模板代码会随模板参数组合重复实例化，导致代码冗余；
+
+4. **减少容器操作**：map等容器操作易生成大量代码，需关注其对体积的影响；
+
+## Parallelization and synchronization
+
+通过充分利用多核并行能力提升计算效率，同时优化同步机制（锁、通道等）减少开销与竞争，兼顾指令级并行（SIMD）、缓存优化等手段，平衡并行收益与同步成本。
+
+1. **利用并行化**：将高开销任务按批次拆分后并行处理（避免逐元素并行的成本），完成后合并结果；需验证系统资源状态——无空闲CPU/内存带宽饱和时，并行化可能无效甚至性能下降。
+
+```cpp
+//Parallelization improves decoding performance by 5x.
+
+// old impl
+for (int c = 0; c < clusters->size(); c++) {
+  RET_CHECK_OK(DecodeBulkForCluster(...);
+}
+
+// new impl
+struct SubTask {
+  absl::Status result;
+  absl::Notification done;
+};
+
+std::vector<SubTask> tasks(clusters->size());
+for (int c = 0; c < clusters->size(); c++) {
+  options_.executor->Schedule([&, c] {
+    tasks[c].result = DecodeBulkForCluster(...);
+    tasks[c].done.Notify();
+  });
+}
+for (int c = 0; c < clusters->size(); c++) {
+  tasks[c].done.WaitForNotification();
+}
+for (int c = 0; c < clusters->size(); c++) {
+  RETURN_IF_ERROR(tasks[c].result);
+}
+```
+
+2. **分摊锁获取成本**：避免细粒度加锁，减少热路径中的Mutex操作开销；改动不能增加锁竞争。
+
+3. **缩短临界区**：避免在临界区内执行高开销操作（如RPC、文件访问），减少临界区触及的缓存行数；警惕临界区解锁前执行的高开销析构函数（如~MutexUnlock触发的析构），可将高开销析构对象声明在MutexLock前（需确保线程安全）。
+
+4. **分片（Sharding）减少锁竞争**：将高竞争的Mutex保护数据结构拆分为多个分片（各分片独立加锁，需无跨分片约束）；若为map结构，可改用并发哈希表；分片选择的信息需合理——避免哈希值部分位重复使用导致分布不均，引发哈希表性能问题。
+
+5. **SIMD指令加速**：利用现代CPU的SIMD指令一次性处理多个数据项（如absl::flat_hash_map的批量操作场景）。
+
+6. **减少伪共享（False Sharing）**：不同线程访问的可变数据放在不同缓存行（如C++用alignas指令），将高频修改字段与其他字段隔离在不同缓存行；alignas易滥用导致对象体积大幅增加，需性能测试验证收益。
+
+7. **降低上下文切换频率**：小任务直接内联处理，而非提交至设备线程池。
+
+8. **缓冲通道实现流水线**：无缓冲通道会导致写方阻塞至读方就绪，仅适用于同步，不适用于提升并行性；使用缓冲通道提升并行流水线效率。
+
+9. **考虑无锁方案**：无锁数据结构可替代传统Mutex保护结构，优先使用高层抽象而非直接操作原子变量；直接操作原子变量易出错，需谨慎。
+
+## Protocol Buffer advice
+
+Protocol Buffer（Protobuf）虽便于数据的网络传输/持久化存储，但存在显著性能开销，且会增加二进制体积，引发指令缓存（i-cache）和数据缓存（d-cache）压力：
+
+Protobuf性能优化建议
+
+1. **避免不必要使用Protobuf**：非传输/持久化场景优先使用原生数据结构（如C++ struct+vector），而非强行用Protobuf承载数据；
+2. **简化消息结构**：避免无意义的消息层级；
+3. **字段设计优化**：
+   - 高频字段使用小编号；
+   - 谨慎选择数值类型（int32/sint32/fixed32/uint32及64位变体）；
+   - proto2中，重复数值字段添加`[packed=true]`标注以打包存储；
+   - 二进制数据/大值用`bytes`而非`string`；
+4. **减少拷贝开销**：
+   - 设`string_type = VIEW`避免字符串拷贝；
+   - 大字段使用Cord类型降低拷贝成本；
+5. **C++场景专属优化**：
+   - 使用Protobuf Arenas（内存池）；
+   - 复用Protobuf对象，避免频繁创建/销毁；
+6. **工程层面优化**：
+   - 保持`.proto`文件精简；
+   - 内存中可直接存储序列化后的Protobuf（而非解析后的对象）；
+   - 避免使用Protobuf map字段；
+   - 仅使用包含字段子集的Protobuf消息定义（减少冗余）。
+
+## C++-Specific advice
+
+针对C++场景，通过替换标准库容器为更高效的专用数据结构（优化内存占用、缓存效率、分配开销），并限制高开销的`absl::Status/StatusOr`类型在热路径的使用，降低性能损耗。
+
+| 数据结构                | 核心优势                               | 案例/收益                                     |
+|-------------------------|-------------------|-------------------------------------------|
+| absl::flat_hash_map/set | 性能优于`std::map`、`std::unordered_map`、`__gnu_cxx::hash_map`          | 加速LanguageFromCode；优化stats发布/取消发布、SelectServer告警跟踪（旧用`dense_hash_map`） |
+| absl::btree_map/set     | 单节点存储多条目，减少子节点指针开销；条目内存连续，缓存效率更高          | 替代`std::set`实现高频使用的工作队列                                         |
+| util::bitmap::InlinedBitVector | 短位图内联存储，性能优于`std::vector<bool>`                              | 替代`std::vector<bool>`，结合`FindNextBitSet`查找目标项                        |
+| absl::InlinedVector     | 小数量元素内联存储（数量可配置），提升缓存效率，小元素场景避免内存分配    | 多处替代`std::vector`使用                                                   |
+| gtl::vector32           | 仅支持32位大小的自定义vector，大幅节省内存                               | 简单类型替换后为Spanner节省约8TiB内存                                      |
+| gtl::small_map          | 内联数组存储少量KV对，超出后自动切换为指定map类型                        | 在tflite_model中使用                                                      |
+| gtl::small_ordered_set  | 固定数组存储少量元素，超出后切换为set/multiset，优化小集合性能            | 存储监听器集合，缩小缓存占用、缩短临界区长度                              |
+| gtl::intrusive_list<T>  | 链表指针嵌入元素T内，相比`std::list<T*>`减少1个缓存行+间接寻址开销       | 跟踪每个索引行更新的未完成请求                                           |
+
+## Further reading
+
+In no particular order, a list of performance related books and articles that the authors have found helpful:
+
+- [Optimizing software in C++](https://www.agner.org/optimize/optimizing_cpp.pdf) by Agner Fog. Describes many useful low-level techniques for improving performance.
+- [Understanding Software Dynamics](https://www.oreilly.com/library/view/understanding-software-dynamics/9780137589692/) by Richard L. Sites. Covers expert methods and advanced tools for diagnosing and fixing performance problems.
+- [Performance tips of the week](https://abseil.io/fast/) - a collection of useful tips.
+- [Performance Matters](https://travisdowns.github.io/) - a collection of articles about performance.
+- [Daniel Lemire’s blog](https://lemire.me/blog/) - high performance implementations of interesting algorithms.
+- [Building Software Systems at Google and Lessons Learned](https://www.youtube.com/watch?v=modXC5IWTJI) - a video that describes system performance issues encountered at Google over a decade.
+- [Programming Pearls and More Programming Pearls: Confessions of a Coder]() by Jon Bentley. Essays on starting with algorithms and ending up with simple and efficient implementations.
+- [Hacker’s Delight](https://en.wikipedia.org/wiki/Hacker%27s_Delight) by Henry S. Warren. Bit-level and arithmetic algorithms for solving some common problems.
+- [Computer Architecture: A Quantitative Approach](https://books.google.co.jp/books/about/Computer_Architecture.html?id=cM8mDwAAQBAJ&redir_esc=y) by John L. Hennessy and David A. Patterson - Covers many aspects of computer architecture, including one that performance-minded software developers should be aware of like caches, branch predictors, TLBs, etc.
