@@ -105,7 +105,7 @@
 ### OS
 
 - `深入理解计算机系统` CSAPP
-- `程序员的自我修养-链接、装载与库`
+- `程序员的自我修养-链接、装载与库`[Done]
 - `TCP\IP`
 - `编译原理`
 
@@ -176,10 +176,6 @@
 * lock-free
 * kernel code unix
 
-#### C++ Topics
-
-* [C++20 Coroutines and io_uring - Part 1/3](https://pabloariasal.github.io/2022/11/12/couring-1/)
-
 ### Rust
 
 > 一种面向未来的可能性
@@ -190,8 +186,6 @@
 * 写三个练手小项目（minigrep、）
 
 ### Golang
-
-> 按照团队要求，作为第二开发语言
 
 * 复习 Basic concept
 * go in deep
