@@ -4,7 +4,7 @@
 
 - O1 内功
   - KR1：数据库
-    - 布局和格式 [Q1]从K、LevelDB、ClickHouse开始，利用excalidraw话内存布局和文件格式图，整理文档
+    - 布局和格式 [Q1]从K、LevelDB、ClickHouse开始，利用excalidraw画内存布局和文件格式图，整理文档
     - 编码和压缩 [Q1]MIT公开课、论文调研，深入编码和压缩算法，[Q2]在K上进行实践
   - KR2：高性能编程：
     - SIMD
@@ -22,6 +22,7 @@
   - KR1：小说
     - [Q1]智能体+科幻 整一个
   - KR2：阅读
+    - [Abseil Tips](https://abseil.io/tips/)
     - 内存连贯性和缓存一致性
     - Large-Scale Cpp
 - O4 其他
@@ -43,8 +44,8 @@
 - 博客：13/50，主要在知乎，达成率26%。26年加强数量和体系化，同时扩展平台范围
 - 软考：考了两次都失败了，第一次基础没过，第二次论文没过。26年再试一次
 - 读书：
-	- 完成：`数据密集型应用系统设计`、[C++ 高性能编程（全）(译)](https://www.cnblogs.com/apachecn/p/18172912)、`程序员的自我修养-链接、装载与库`
-	- 进行中：[Abseil C++ Tips of Week](https://abseil.io/tips/)、内存连贯性和缓存一致性导论、Large-Scale C++
+  - 完成：`数据密集型应用系统设计`、[C++ 高性能编程（全）(译)](https://www.cnblogs.com/apachecn/p/18172912)、`程序员的自我修养-链接、装载与库`
+  - 进行中：[Abseil C++ Tips of Week](https://abseil.io/tips/)、内存连贯性和缓存一致性导论、Large-Scale C++
 - 系统设计放心的学习不够系统，进度不多
 - 完成了装修 + 搬家，但是通勤比较累，作息不好。26年优化作息，晚上睡够8小时
 - 忙于装修假期也没有出去玩。26年还是要规划出行，走走看看
