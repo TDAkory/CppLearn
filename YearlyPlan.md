@@ -6,6 +6,7 @@
   - KR1：数据库
     - 布局和格式 [Q1]从K、LevelDB、ClickHouse开始，利用excalidraw画内存布局和文件格式图，整理文档
     - 编码和压缩 [Q1]MIT公开课、论文调研，深入编码和压缩算法，[Q2]在K上进行实践
+    - 论文学习 50篇 周更&整理笔记&做记录
   - KR2：高性能编程：
     - SIMD
     - Vector Search

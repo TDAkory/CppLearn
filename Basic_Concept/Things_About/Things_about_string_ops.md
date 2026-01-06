@@ -70,6 +70,60 @@ std::map<std::string, std::string> m = absl::StrSplit("a,1,b,2,c,3", ',');
 
 `absl::StrJoin()`
 
+## Disappearing Act
+
+Unsafe to do so!
+
+```cpp
+// DON’T DO THIS
+std::string s1, s2;
+...
+const char* p1 = (s1 + s2).c_str();             // Avoid!
+const char* p2 = absl::StrCat(s1, s2).c_str();  // Avoid!
+```
+
+Both (s1+s2) and absl::StrCat(s1,s2) create temporary objects.
+
+“Temporary objects are destroyed as the last step in evaluating the full-expression that (lexically) contains the point where they were created.” (A “full-expression” is “an expression that is not a subexpression of another expression”).
+
+**Option 1**: Finish Using the Temporary Object Before the End of the full-expression:
+
+```cpp
+// Safe (albeit a silly example):
+size_t len1 = strlen((s1 + s2).c_str());
+size_t len2 = strlen(absl::StrCat(s1, s2).c_str());
+```
+
+**Option 2**: Store the Temporary Object. (make it a concrete lvalue)
+
+**Option 3**: Store a Reference to the Temporary Object.
+
+C++17 standard [class.temporary]: “The temporary to which the reference is bound or the temporary that is the complete object of a sub-object to which the reference is bound persists for the lifetime of the reference.”
+
+```cpp
+// Equally safe:
+const std::string& tmp_1 = s1 + s2;
+const std::string& tmp_2 = absl::StrCat(s1, s2);
+// tmp_1.c_str() and tmp_2.c_str() are safe.
+// The following behavior is dangerously subtle:
+// If the compiler can see you’re storing a reference to a
+// temporary object’s internals, it will keep the whole
+// temporary object alive.
+// struct Person { string name; ... }
+// GeneratePerson() returns an object; GeneratePerson().name
+// is clearly a sub-object:
+const std::string& person_name = GeneratePerson().name; // safe
+// If the compiler can’t tell, you’re at risk.
+// class DiceSeries_DiceRoll { `const string&` nickname() ... }
+// GenerateDiceRoll() returns an object; the compiler can’t tell
+// if GenerateDiceRoll().nickname() is a subobject.
+// The following may store a dangling reference:
+const std::string& nickname = GenerateDiceRoll().nickname(); // BAD!
+```
+
+**Option 4**: Design your functions so they don’t return objects???
+
 ## Ref
 
 * [Tip of the Week #3: String Concatenation and operator+ vs. StrCat()](https://abseil.io/tips/3)
+* [Tip of the Week #5: Disappearing Act](https://abseil.io/tips/5)
