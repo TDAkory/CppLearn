@@ -53,3 +53,4 @@
 ## Ref
 
 - [Performance Tip of the Week #7: Optimizing for application productivity](https://abseil.io/fast/7)
+- [Performance Tip of the Week #9: Optimizations past their prime](https://abseil.io/fast/9)

@@ -127,3 +127,5 @@ const std::string& nickname = GenerateDiceRoll().nickname(); // BAD!
 
 * [Tip of the Week #3: String Concatenation and operator+ vs. StrCat()](https://abseil.io/tips/3)
 * [Tip of the Week #5: Disappearing Act](https://abseil.io/tips/5)
+* [Tip of the Week #10: Splitting Strings, not Hairs](https://abseil.io/tips/10)
+* [Tip of the Week #18: String Formatting with Substitute](https://abseil.io/tips/18)

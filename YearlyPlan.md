@@ -11,6 +11,7 @@
     - SIMD
     - Vector Search
     - Blog & CppCon Post
+    - [Performance](./Topics/Performance_Efficiency/00_resources.md)
   - KR3：系统设计：
     - [Q1]s09g的Post、
   - KR4：AI & Agent
