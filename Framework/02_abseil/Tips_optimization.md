@@ -1,6 +1,6 @@
 # Tips of Optimization
 
-## Performance Tip of the Week #7: Optimizing for application productivity
+## Optimizing for application productivity
 
 本文是Google发布的性能优化技巧系列第7篇，核心主题是**以“应用生产力”为核心进行优化**，而非依赖传统资源消耗或指令相关指标。
 
@@ -28,7 +28,7 @@
 - 应用生产力指标（APMs）是衡量优化价值的关键，能帮助团队识别传统指标无法覆盖的有效优化。
 - 优化的核心目标是“提升单位资源的有用工作量”，而非单纯降低某一组件的耗时或提升指令相关指标，这一导向能更高效地优化Google服务器集群的整体效率。
 
-## Performance Tip of the Week #9: Optimizations past their prime
+## Optimizations past their prime
 
 本文核心观点为：优化并非一劳永逸，过去针对旧平台（如Intel Pentium 3、AMD Opterons）的合理优化，随着硬件迭代与编译器发展，可能逐渐沦为性能负担。文章通过两个具体案例展开，并给出长期有效的优化实践建议。
 
