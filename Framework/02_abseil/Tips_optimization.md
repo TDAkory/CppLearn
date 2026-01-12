@@ -50,7 +50,77 @@
 4. 附带微基准测试：优化变更需搭配对应的微基准测试，确保优化效果。
 5. 合理设计配置项：配置项应基于“预期结果”而非“具体行为”设计，避免固定过时的默认逻辑，确保配置能随环境变化持续保持最优。
 
+## Fixing things with hashtable profiling
+
+核心结论：Abseil C++哈希表（如`flat_hash_map`）内置性能分析工具，可通过关键统计指标识别哈希函数低熵、碰撞过多等问题，结合盐值注入（Using a distinct hash function by salting the hash）、更换哈希函数等手段，能显著优化哈希表操作性能（如插入、查找），文中通过多个生产环境案例验证了该方法的有效性。
+
+- 数据收集：从生产环境服务器收集哈希表性能数据，通过`pprof`工具加载分析。
+- 核心目标：定位“有问题的哈希表”，这类哈希表通常源于两个原因——哈希函数熵值低（混合效果差）、分片与表内查找复用同一哈希函数。
+- 基础优化方向：优先使用`absl::Hash`（自带良好的位混合效果）；通过“盐值注入”实现分片与表内查找的哈希函数差异化。
+
+**问题1：Stuck Bits（卡住的位）**：Stuck Bits指所有哈希值中“始终不变”的位（要么全0，要么全1），会导致哈希碰撞概率呈指数级上升，严重影响哈希表操作效率。
+
+问题场景：哈希表数组`pending_ack_callbacks_`（256个分片）通过`Closure*`地址哈希取模分片，分片内哈希表复用同一哈希函数，导致所有分片的哈希值低位完全相同（`0xff`），碰撞频发。
+
+解决方案：给分片哈希注入盐值，使用`std::pair(地址, 固定值)`作为哈希输入，让分片与表内查找使用不同哈希函数。
+
+```cpp
+// 优化后：盐值42实现哈希函数差异化
+absl::Hash<std::pair<Closure*, int>> h;
+return h(std::pair(address, 42)) % kNumPendingAckShards;
+```
+
+优化效果：该库的插入操作成本降低50%。
+
+**问题2：高碰撞率（过多探测次数）**：哈希表查找时，若目标位置被占用需“探测”后续位置，理想探测长度为0（一次命中）。当平均探测长度>0.1（10%的键发生碰撞），或最大探测长度过大时，查找性能会从O(1)退化至O(n)，且可能触发未缓存的内存加载，进一步降低效率。
+
+- 平均探测长度计算：`total_probe_length / (num_erases + size)`（分子为总探测次数，分母为累计插入元素数）。
+
+问题场景：`priority_hash_map`（封装`absl::flat_hash_map`）使用自定义哈希函数，通过`xor`组合`IpFlow`的IP、端口等字段，位混合效果差，导致最大探测长度达133，平均探测长度8.4，近似线性查找。
+  
+解决方案：为`IpFlow`实现`AbslHashValue`接口，接入`absl::Hash`的位混合逻辑，替代原有的`xor`组合方式。
+  
+```cpp
+// 优化后：通过H::combine实现高效位混合
+template<typename H>
+friend H AbslHashValue(H h, const IpFlow& flow) {
+  return H::combine(std::move(h), flow.remote_ip(), flow.proto(), 
+                    flow.local_port(), flow.remote_port());
+}
+```
+
+**关键哈希表统计指标（Profiling核心数据）**：分析工具会记录每个哈希表的以下指标，用于定位问题：
+
+| 指标名称 | 核心意义 |
+|----------|----------|
+| `capacity` | 哈希表的实际容量 |
+| `size` | 当前存储的元素数量 |
+| `max_probe_length` | 单个元素的最大探测长度（反映最坏碰撞情况） |
+| `total_probe_length` | 所有元素的探测长度总和（计算平均探测长度的基础） |
+| `stuck_bits` | 哈希值中“卡住的位”掩码（>10元素的表理想值为0） |
+| `num_rehashes` | 重哈希次数（合理调用`reserve`可减少该值） |
+| `max_reserve` | 调用`reserve`时传入的最大容量（判断容量是否过度预留） |
+| `num_erases` | 累计删除元素数（与`size`之和为累计插入数） |
+| `inline_element_size`/`key_size`/`value_size` | 元素、键、值的大小（影响内存布局与访问效率） |
+| `soo_capacity` | 小对象优化（SOO）的元素容量 |
+| `table_age` | 哈希表创建时长（微秒） |
+
+单元测试中的问题检测
+
+- 启用方式：设置环境变量`ABSL_CONTAINER_FORCE_HASHTABLEZ_SAMPLE=1`，运行单元测试时自动触发哈希表性能检测。
+- 注意事项：检测阈值较高，因单元测试插入的元素数量通常较少，可能无法触发碰撞场景，仅作为额外防护手段。
+
+核心优化原则总结
+
+1. 优先使用`absl::Hash`，其内置高效位混合逻辑，避免自定义哈希函数的低熵问题；
+2. 分片场景下，通过“盐值注入”让分片哈希与表内哈希函数差异化，避免Stuck Bits；
+3. 定期通过`pprof`分析哈希表指标，重点关注`stuck_bits`（需为0）和平均探测长度（需<0.1）；
+4. 合理调用`reserve`设置预期容量，减少重哈希次数和内存浪费。
+
+> Finding issues in hashtables from a CPU profile alone is challenging since opportunities may not appear prominently in the profile. SwissMap’s built-in hashtable profiling lets us peer into a number of hashtable properties to find low-quality hash functions, collisions, or excessive rehashing.
+
 ## Ref
 
 - [Performance Tip of the Week #7: Optimizing for application productivity](https://abseil.io/fast/7)
 - [Performance Tip of the Week #9: Optimizations past their prime](https://abseil.io/fast/9)
+- [Performance Tip of the Week #26: Fixing things with hashtable profiling](https://abseil.io/fast/26)
