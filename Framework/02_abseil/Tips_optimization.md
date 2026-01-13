@@ -119,8 +119,36 @@ friend H AbslHashValue(H h, const IpFlow& flow) {
 
 > Finding issues in hashtables from a CPU profile alone is challenging since opportunities may not appear prominently in the profile. SwissMap’s built-in hashtable profiling lets us peer into a number of hashtable properties to find low-quality hash functions, collisions, or excessive rehashing.
 
+## Beware microbenchmarks bearing gifts
+
+1. **基准测试的核心定位与层级**
+   - 核心观点：基准测试不能精准预测生产环境性能，仅用于辅助效率调试；性能测试的预测性远低于正确性测试，微基准测试的误导风险更高。
+   - 层级划分（从简单到复杂、从快到慢、从低精度到高精度）：微基准测试 → 单任务负载测试 → 集群负载测试 → 生产环境，层级越高越贴近真实场景，目的是优化性能优化的迭代开发过程（缩短“OODA循环”）。
+
+2. **微基准测试误导生产的典型案例**
+   - **memcmp代码膨胀**：glibc的memcmp实现为微基准优化采用手写汇编，虽单测性能优，但代码量达~6KB，导致指令缓存失效、驱逐其他函数，宏观性能下降；类似地，微基准中“更快”的memcpy实现因代码 footprint 大，反而比“看似较慢”的小体积实现表现更差。
+   - **算术运算vs预计算数组加载**：微基准中预计算掩码数组可缓存常驻，看似优化，但生产环境中数组缓存可能被驱逐（引发主存访问阻塞），且x86 Haswell后的BMI2指令集（如bzhi）比加载+掩码更高效。
+   - **TCMalloc预取操作**：微基准显示该预取操作成本高（占new快速路径70%+周期），但生产中预取的下一个同尺寸对象常被复用，且能在无依赖的预取阶段处理TLB缺失，避免使用时阻塞，实际提升CPU生产力。
+
+3. **微基准测试的常见陷阱**
+   - 数据/指令缓存不具代表性：基准测试工作集小、缓存常驻，而生产环境多为内存受限、指令 footprint 庞大（谷歌代码特征）；
+   - 敏感于底层细节：函数/分支对齐、栈对齐的微小变化可能导致20%性能波动；
+   - 测试场景不匹配：数据类型、代码路径与生产差异大，或引入真实 workload 中不存在的代码（如冗余随机数生成）；
+   - 忽略动态行为：基准测试易收敛到稳态，而生产负载存在变异性。
+
+4. **合理利用基准测试的策略**
+   - 聚焦组件单个属性：测试核心操作（如搜索场景中posting list的迭代创建/销毁、前进等基础行为）；
+   - 锚定生产行为：通过生产 profiling 确定关键优化点，避免优化非核心操作；
+   - 多层级验证：先通过微基准验证优化原型，再用单任务、集群负载测试逐步验证，若结果矛盾需修正微基准（可能未测准目标）；
+   - 重视相对性能：即使部分操作生产占比低，其基准测试可提供相对性能参考，避免优化导致该操作性能退化（如用迭代替代前进操作的可行性分析）。
+
+5. **总结**
+   - 微基准测试虽可辅助原型验证，但难以准确反映生产性能；
+   - 采用“从简单到复杂”的多层级基准测试体系，理解基准测试与生产环境的差异，是提升测试保真度、避免误导的关键，同时能反向加深对生产行为的认知。
+
 ## Ref
 
 - [Performance Tip of the Week #7: Optimizing for application productivity](https://abseil.io/fast/7)
 - [Performance Tip of the Week #9: Optimizations past their prime](https://abseil.io/fast/9)
 - [Performance Tip of the Week #26: Fixing things with hashtable profiling](https://abseil.io/fast/26)
+- [Performance Tip of the Week #39: Beware microbenchmarks bearing gifts](https://abseil.io/fast/39)

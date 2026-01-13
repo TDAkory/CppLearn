@@ -70,6 +70,28 @@ std::map<std::string, std::string> m = absl::StrSplit("a,1,b,2,c,3", ',');
 
 `absl::StrJoin()`
 
+- 接收待连接的集合（或元素范围）与分隔符字符串，自动完成元素连接；
+- 支持多种数据类型：`std::string`、`absl::string_view`、`int`、`double`等所有`absl::StrCat()`兼容类型；
+- 支持自定义格式化：对`absl::StrCat()`不兼容的类型，可通过`Formatter`（或C++ lambda表达式）实现自定义格式转换。
+
+```cpp
+std::vector<std::string> v = {"a", "b", "c"};
+std::string s = absl::StrJoin(v, "-");
+// s == "a-b-c"
+
+std::vector<absl::string_view> v = {"a", "b", "c"};
+std::string s = absl::StrJoin(v.begin(), v.end(), "-");
+// s == "a-b-c"
+
+std::vector<int> v = {1, 2, 3};
+std::string s = absl::StrJoin(v, "-");
+// s == "1-2-3"
+
+const int a[] = {1, 2, 3};
+std::string s = absl::StrJoin(a, "-");
+// s == "1-2-3"
+```
+
 ## Disappearing Act
 
 Unsafe to do so!
@@ -129,3 +151,4 @@ const std::string& nickname = GenerateDiceRoll().nickname(); // BAD!
 * [Tip of the Week #5: Disappearing Act](https://abseil.io/tips/5)
 * [Tip of the Week #10: Splitting Strings, not Hairs](https://abseil.io/tips/10)
 * [Tip of the Week #18: String Formatting with Substitute](https://abseil.io/tips/18)
+* [Tip of the Week #36: New Join API](https://abseil.io/tips/36)
