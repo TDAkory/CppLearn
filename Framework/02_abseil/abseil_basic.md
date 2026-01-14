@@ -6,3 +6,5 @@
   - [Note 1 string view](../../Basic_Concept/Things_About/Things_about_string_view.md)
   - [Note 2 string ops](../../Basic_Concept/Things_About/Things_about_string_ops.md)
   - [Note 3 optimize philosophy](./Tips_optimize_for_application_productivity.md)
+
+- Tips相关笔记查找关键字 `Tip of the Week #`

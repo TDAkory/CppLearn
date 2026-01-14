@@ -255,6 +255,18 @@ namespace B
 * 符合C++的设计哲学：C++语言的设计哲学之一是提供强大而灵活的工具，以支持各种编程范式。ADL是这一哲学的体现，它提供了一种自然而直观的方式来处理与类型相关的操作。
 * 历史原因：ADL是C++早期版本中就已经存在的特性，它随着语言的发展而逐渐演化，成为C++中不可或缺的一部分。
 
+## 实际开发中的技巧与避坑点
+
+- **类型别名陷阱**：`typedef`/`using`的别名不改变关联命名空间，需展开原始类型才能准确判断ADL查找范围（如`bspace::AliasForA`本质是`aspace::A`，ADL会搜索`aspace`而非`bspace`）。
+- **迭代器慎用ADL**：迭代器的关联命名空间不确定（可能是指针、可能是库内部私有命名空间），依赖ADL解析迭代器相关函数（如`count`）可能导致跨平台/编译模式（Debug/Release）兼容性问题，建议显式限定作用域（如`std::count`）。
+- **重载运算符的放置原则**：运算符（如`<<`）本质是未限定名函数，应放在其操作数类型的同一命名空间（如`O::Obj`的`operator<<`放在`O`中），避免被外层命名空间的同名运算符隐藏，导致编译异常。
+- **基本类型无ADL**：`int`、`double`等基本类型无关联命名空间，不会触发ADL；指针/数组类型的关联命名空间与指向/包含的元素类型一致。
+- **重构风险**：移动类型或函数到新命名空间时，可能改变ADL的查找范围，导致函数调用解析失败或匹配到非预期函数（即使保留`using`声明/类型别名也可能失效）。
+
+ADL虽复杂，但理解其“词法作用域查找+参数关联命名空间查找”的并行逻辑，能解释看似“远程”的函数声明被匹配的现象。
+
+开发中需主动规避ADL的不确定性（如迭代器场景显式限定作用域），同时合理利用ADL简化运算符重载等场景的代码（无需显式限定命名空间）。
+
 ## 参考引用
 
 > 关于"在C++中确定一个名称"这一相关话题，本文仍有一些未提及的场景，比如模板参数推导、重载解析等，可以参考：
@@ -262,3 +274,4 @@ namespace B
 - [Name lookup](https://en.cppreference.com/w/cpp/language/lookup)
 - [Template argument deduction](https://en.cppreference.com/w/cpp/language/function_template)
 - [Overload resolution](https://en.cppreference.com/w/cpp/language/overload_resolution)
+- [Tip of the Week #49: Argument-Dependent Lookup](https://abseil.io/tips/49)
